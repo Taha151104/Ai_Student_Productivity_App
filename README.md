@@ -22,12 +22,16 @@ pubspec.yaml      # all dependencies pre-added
 **Already functional (not just placeholders):**
 - Welcome → Register/Login → Dashboard navigation
 - Firebase Auth (email/password + Google Sign-In) wiring in `auth_service.dart`
-- Image picker → ML Kit OCR text extraction (`notes_upload_screen.dart`)
-- Gemini API call for AI Summary + Chatbot (`ai_service.dart`)
+- Subject folders support PDF, DOCX, TXT, and image-based note uploads. Extracted syllabus text is saved with page labels for PDFs, while original documents are retained in Firebase Storage.
+- The quiz generator uses extracted text from the selected subject folder, a student-specified quiz prompt, and the chosen question count. Document metadata is excluded from quiz generation.
+- Chat lets the student choose a persistent response language and can inspect a specified page of an uploaded PDF for diagram questions.
+- AI Summary, Chatbot, Quiz, and Flashcards use the saved subject materials.
 
-**Still placeholders (Quiz, Flashcards, Study Planner, Progress, Support):**
-Each screen has a comment block telling you exactly what to wire up and to
-which use case it maps.
+Original-file uploads require Firebase Storage to be enabled and Storage Rules
+to allow authenticated users to read/write only their own
+`users/{uid}/subjects/{subjectId}/files/` objects.
+
+Study Planner, Progress, and Support continue to be developed.
 
 ## Setup steps (run these locally — this sandbox can't run Flutter)
 
@@ -62,15 +66,33 @@ which use case it maps.
 5. **Enable Firebase Auth methods** (Email/Password + Google) and **create a
    Firestore database** in the Firebase Console.
 
-6. **Add your Gemini API key** at run time (never hardcode it):
+6. **Add your AI API keys** to the ignored local file
+   `config/dev-keys.json` using the `GEMINI_API_KEY`, `OPENROUTER_API_KEY`,
+   and `HUGGINGFACE_API_KEY` fields. The app tries Gemini first for image OCR,
+   then OpenRouter, then Hugging Face:
    ```bash
-   flutter run --dart-define=GEMINI_API_KEY=your_key_here
+   flutter run -d chrome --dart-define-from-file=config/dev-keys.json
    ```
 
-7. **Run it:**
+   Make sure each key belongs to its named provider (Google AI Studio keys
+   typically start with `AIza`, OpenRouter keys with `sk-or-`, and Hugging Face
+   tokens with `hf_`). Do not paste API keys into source code or chat.
+
+   Dart defines are compiled into the web app. Do not use real API keys in a
+   publicly deployed web build; use a server-side proxy for production.
+
+7. **Run on mobile** (optional):
    ```bash
-   flutter run --dart-define=GEMINI_API_KEY=your_key_here
+   flutter run --dart-define-from-file=config/dev-keys.json
    ```
+
+   To build a release APK with the same configured providers:
+   ```bash
+   flutter build apk --release --dart-define-from-file=config/dev-keys.json
+   ```
+   Rebuild the APK whenever API keys or AI service code changes. The keys are
+   embedded in the app package, so do not distribute a public APK containing
+   personal development keys.
 
 ## Suggested build order (matches the "framework first, features one by one" plan)
 

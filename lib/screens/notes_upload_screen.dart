@@ -4,15 +4,36 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 import '../services/ai_service.dart';
 import '../services/ocr_service.dart';
 
-/// UC-04/UC-06 Upload/Scan Notes + UC-05 Extract Text (OCR).
-///
-/// Mobile  — Camera OR gallery → ML Kit OCR (on-device, fast, offline)
-/// Web     — Gallery upload only → AI Vision OCR (HF API, cross-platform)
-///
-/// On both platforms the extracted text is selectable and copyable.
+// ─────────────────────────────────────────────────────────────────────────────
+// 🎨 EDIT SCAN & NOTES UPLOAD COLORS RIGHT HERE:
+// ─────────────────────────────────────────────────────────────────────────────
+class NotesUploadTheme {
+  static const Color pageBg = Colors.white;
+  static const Color electricBlue = Color(0xFF0284C7); // Vibrant Electric Blue
+  static const Color skyGlow = Color(0xFF38BDF8); // Bright Cyan / Sky
+  static const Color cardFill = Color(0xFFF0F7FF); // Soft Ice Blue Canvas
+  static const Color navyDark = Color(0xFF0F172A); // Deep Executive Navy
+  static const Color navyAccent = Color(0xFF1E3A8A); // Rich Navy Blue
+  static const Color silver = Color(0xFF94A3B8); // Metallic Platinum Silver
+  static const Color silverBorder = Color(0xFFCBD5E1); // Crisp Silver Outline
+  static const Color textDark = Color(0xFF0F172A);
+  static const Color textMuted = Color(0xFF64748B);
+  static const List<Color> scanGradient = [
+    Color(0xFF38BDF8),
+    Color(0xFF0284C7)
+  ];
+  static const List<Color> saveGradient = [
+    Color(0xFF1E3A8A),
+    Color(0xFF0F172A)
+  ];
+}
+
 class NotesUploadScreen extends StatefulWidget {
   const NotesUploadScreen({super.key});
 
@@ -21,42 +42,43 @@ class NotesUploadScreen extends StatefulWidget {
 }
 
 class _NotesUploadScreenState extends State<NotesUploadScreen> {
-  // Services
-  final _ocrService = OcrService(); // native ML Kit — mobile only
-  final _aiService = AiService(); // vision API   — web + mobile fallback
+  final _ocrService = OcrService();
+  final _aiService = AiService();
+  final _auth = FirebaseAuth.instance;
 
-  // State
-  Uint8List? _imageBytes; // used for display on all platforms
-  File? _imageFile; // used for ML Kit OCR on mobile
-  String? _mimeType; // passed to the vision API
+  Uint8List? _imageBytes;
+  File? _imageFile;
+  String? _mimeType;
   String? _extractedText;
   bool _isProcessing = false;
+  bool _isSavingToSubject = false;
 
-  // Design tokens
-  static const Color primary = Color(0xFF6C3CF7);
-  static const Color pageBg = Color(0xFFEEEBFD);
-  static const Color fieldFill = Color(0xFFF0EDFE);
-  static const Color textDark = Color(0xFF1A1040);
-  static const Color textMuted = Color(0xFF5B5E7A);
-
-  // ── Image picking ─────────────────────────────────────────────────────────
-
-  Future<void> _pickImage(ImageSource source) async {
-    final picked = await ImagePicker().pickImage(source: source);
-    if (picked == null) return;
-
-    final bytes = await picked.readAsBytes();
-    final mime = _mimeFromPath(picked.path);
-
-    setState(() {
-      _imageBytes = bytes;
-      _imageFile = kIsWeb ? null : File(picked.path);
-      _mimeType = mime;
-      _extractedText = null;
-    });
+  @override
+  void dispose() {
+    _ocrService.dispose();
+    super.dispose();
   }
 
-  /// Derive MIME type from file extension (fallback: image/jpeg).
+  // ── Image Picking ──────────────────────────────────────────────────────────
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final picked = await ImagePicker().pickImage(source: source);
+      if (picked == null) return;
+
+      final bytes = await picked.readAsBytes();
+      final mime = _mimeFromPath(picked.path);
+
+      setState(() {
+        _imageBytes = bytes;
+        _imageFile = kIsWeb ? null : File(picked.path);
+        _mimeType = mime;
+        _extractedText = null;
+      });
+    } catch (e) {
+      _snack('Could not load image: $e', Colors.red);
+    }
+  }
+
   String _mimeFromPath(String path) {
     final ext = path.split('.').last.toLowerCase();
     const map = {
@@ -65,13 +87,11 @@ class _NotesUploadScreenState extends State<NotesUploadScreen> {
       'jpeg': 'image/jpeg',
       'jfif': 'image/jpeg',
       'webp': 'image/webp',
-      'gif': 'image/gif',
     };
     return map[ext] ?? 'image/jpeg';
   }
 
-  // ── OCR ───────────────────────────────────────────────────────────────────
-
+  // ── OCR: English + Mathematical Symbols Extraction ─────────────────────────
   Future<void> _runOcr() async {
     if (_imageBytes == null) return;
     setState(() {
@@ -80,187 +100,525 @@ class _NotesUploadScreenState extends State<NotesUploadScreen> {
     });
 
     try {
-      String text;
+      String text = '';
+
       if (!kIsWeb && _imageFile != null) {
-        // Mobile: fast on-device ML Kit
+        // Native mobile ML Kit OCR
         text = await _ocrService.extractTextFromImage(_imageFile!);
       } else {
-        // Web: AI vision model via HTTP
+        // Web / Vision OCR with explicit English & Mathematical Symbol preservation
         text = await _aiService.extractTextFromImageBytes(
           _imageBytes!,
           mimeType: _mimeType ?? 'image/jpeg',
         );
       }
-      setState(() => _extractedText =
-          text.trim().isEmpty ? '(No text detected in image)' : text);
+
+      // Preserve clean mathematical formatting & symbols
+      text = _formatMathAndSymbols(text);
+
+      setState(() {
+        _extractedText = text.trim().isEmpty
+            ? '(No readable text or formulas detected)'
+            : text;
+      });
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('OCR failed: $e')));
-      }
+      _snack('Extraction failed: $e', Colors.red);
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
   }
 
-  // ── Clipboard ─────────────────────────────────────────────────────────────
+  /// Ensures mathematical symbols (±, ×, ÷, √, ∑, ∫, π, θ, α, β, etc.) remain intact
+  String _formatMathAndSymbols(String raw) {
+    if (raw.isEmpty) return raw;
+    return raw
+        .replaceAll(r'\pm', '±')
+        .replaceAll(r'\times', '×')
+        .replaceAll(r'\div', '÷')
+        .replaceAll(r'\sqrt', '√')
+        .replaceAll(r'\sum', '∑')
+        .replaceAll(r'\int', '∫')
+        .replaceAll(r'\infty', '∞')
+        .replaceAll(r'\pi', 'π')
+        .replaceAll(r'\theta', 'θ')
+        .replaceAll(r'\alpha', 'α')
+        .replaceAll(r'\beta', 'β')
+        .replaceAll(r'\leq', '≤')
+        .replaceAll(r'\geq', '≥')
+        .replaceAll(r'\neq', '≠')
+        .replaceAll(r'\approx', '≈')
+        .replaceAll(r'\Delta', 'Δ');
+  }
+
+  // ── Save Extracted Text to an Existing Subject Folder ──────────────────────
+  Future<void> _showSaveToSubjectDialog() async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      _snack('Please log in to save to your subjects.', Colors.red);
+      return;
+    }
+
+    if (_extractedText == null || _extractedText!.trim().isEmpty) {
+      _snack('No extracted text to save.', Colors.orange);
+      return;
+    }
+
+    final subjectsSnap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('subjects')
+        .orderBy('createdAt', descending: true)
+        .get();
+
+    final docs = subjectsSnap.docs;
+
+    if (docs.isEmpty) {
+      _snack(
+        'No subject folders exist yet. Create one from the Folders tab first.',
+        Colors.orange,
+      );
+      return;
+    }
+
+    String selectedSubjectId = docs.first.id;
+    String selectedSubjectName =
+        (docs.first.data()['name'] ?? 'Subject Folder').toString();
+
+    final filenameController = TextEditingController(
+      text: 'Scan_${DateTime.now().day}_${DateTime.now().month}_Notes.txt',
+    );
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: Colors.white,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            title: Row(
+              children: const [
+                Icon(Icons.folder_shared_rounded,
+                    color: NotesUploadTheme.electricBlue),
+                SizedBox(width: 8),
+                Text(
+                  'Save to Subject Folder',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 17,
+                    color: NotesUploadTheme.textDark,
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Select an existing subject to store this text file:',
+                    style: TextStyle(
+                        color: NotesUploadTheme.textMuted, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  // Dropdown of existing folders ONLY (no create folder option)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: NotesUploadTheme.cardFill,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: NotesUploadTheme.silverBorder),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: selectedSubjectId,
+                        isExpanded: true,
+                        dropdownColor: Colors.white,
+                        items: docs.map((d) {
+                          final name = d.data()['name'] ?? 'Unnamed Subject';
+                          return DropdownMenuItem<String>(
+                            value: d.id,
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.folder_rounded,
+                                  color: NotesUploadTheme.electricBlue,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    name,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: NotesUploadTheme.textDark,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setDialogState(() {
+                              selectedSubjectId = val;
+                              final match = docs.firstWhere((d) => d.id == val);
+                              selectedSubjectName = match.data()['name'] ?? '';
+                            });
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Text File Name:',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12.5,
+                      color: NotesUploadTheme.textDark,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: filenameController,
+                    style: const TextStyle(
+                        fontSize: 13.5, color: NotesUploadTheme.textDark),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: Colors.white,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                            color: NotesUploadTheme.silverBorder),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                            color: NotesUploadTheme.silverBorder),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel',
+                    style: TextStyle(color: NotesUploadTheme.textMuted)),
+              ),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.cloud_upload_rounded, size: 16),
+                label: const Text('Save File'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: NotesUploadTheme.navyAccent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  await _commitSaveToFirestore(
+                    subjectId: selectedSubjectId,
+                    subjectName: selectedSubjectName,
+                    fileName: filenameController.text.trim(),
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _commitSaveToFirestore({
+    required String subjectId,
+    required String subjectName,
+    required String fileName,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null || _extractedText == null) return;
+
+    setState(() => _isSavingToSubject = true);
+
+    try {
+      final safeName = fileName.endsWith('.txt') ? fileName : '$fileName.txt';
+      final preview = _extractedText!.length > 120
+          ? '${_extractedText!.substring(0, 120)}...'
+          : _extractedText!;
+
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('subjects')
+          .doc(subjectId)
+          .collection('files')
+          .add({
+        'fileName': safeName,
+        'fileType': 'txt',
+        'extractedContent': _extractedText,
+        'preview': preview,
+        'uploadedAt': FieldValue.serverTimestamp(),
+      });
+
+      _snack(
+        '✅ Saved "$safeName" into "$subjectName" syllabus hub!',
+        Colors.green,
+      );
+    } catch (e) {
+      _snack('Failed to save to subject: $e', Colors.red);
+    } finally {
+      if (mounted) setState(() => _isSavingToSubject = false);
+    }
+  }
 
   void _copyToClipboard() {
     if (_extractedText == null || _extractedText!.trim().isEmpty) return;
     Clipboard.setData(ClipboardData(text: _extractedText!));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      backgroundColor: textDark,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      content: const Row(children: [
-        Icon(Icons.check_circle, color: Colors.greenAccent, size: 20),
-        SizedBox(width: 10),
-        Text('Copied to clipboard!',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
-      ]),
-    ));
+    _snack('Copied formulas and text to clipboard!', NotesUploadTheme.navyDark);
   }
 
-  @override
-  void dispose() {
-    _ocrService.dispose();
-    super.dispose();
-  }
-
-  // ── Build ─────────────────────────────────────────────────────────────────
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: pageBg,
-      appBar: AppBar(
-        backgroundColor: pageBg,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: textDark, size: 22),
-          onPressed: () => Navigator.maybePop(context),
-        ),
-        title: const Text('Upload / Scan Notes',
-            style: TextStyle(
-                color: textDark, fontWeight: FontWeight.w700, fontSize: 18)),
-        centerTitle: true,
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // ── Action buttons row ────────────────────────────────────────
-              Row(children: [
-                // Camera — mobile only
-                if (!kIsWeb) ...[
-                  Expanded(
-                    child: _gradientBtn(
-                      label: 'Scan',
-                      icon: Icons.camera_alt_outlined,
-                      colors: const [Color(0xFF6C3CF7), Color(0xFF9B6CF9)],
-                      onTap: () => _pickImage(ImageSource.camera),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                ],
-                // Gallery — all platforms
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _pickImage(ImageSource.gallery),
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: textDark,
-                      side: BorderSide(color: primary.withValues(alpha: 0.4)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(30)),
-                    ),
-                    icon: const Icon(Icons.image_outlined,
-                        size: 18, color: primary),
-                    label: const Text(
-                      kIsWeb
-                          ? 'Upload Image  (.jpg .png .jpeg .jfif)'
-                          : 'Upload',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 20),
-
-              // ── Main content area ─────────────────────────────────────────
-              Expanded(
-                child: _isProcessing
-                    ? _buildProcessing()
-                    : _extractedText != null
-                        ? _buildResultsPane()
-                        : _imageBytes != null
-                            ? _buildImagePreview()
-                            : _buildEmptyState(),
-              ),
-            ],
-          ),
+  void _snack(String msg, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        content: Text(
+          msg,
+          style:
+              const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
         ),
       ),
     );
   }
 
-  // ── Sub-widgets ───────────────────────────────────────────────────────────
+  // ── Build UI ───────────────────────────────────────────────────────────────
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: NotesUploadTheme.pageBg,
+      body: Stack(
+        children: [
+          // ── Atmospheric Background Circles (Electric Blue & Silver) ──
+          Positioned(
+            top: -40,
+            left: -30,
+            child: Container(
+              width: 220,
+              height: 220,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: NotesUploadTheme.electricBlue.withOpacity(0.08),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 160,
+            right: -50,
+            child: Container(
+              width: 190,
+              height: 190,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: NotesUploadTheme.silver.withOpacity(0.12),
+              ),
+            ),
+          ),
 
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // ── App Header ──
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      IconButton(
+                        icon: const Icon(
+                          Icons.arrow_back,
+                          color: NotesUploadTheme.navyDark,
+                          size: 22,
+                        ),
+                        onPressed: () => Navigator.maybePop(context),
+                      ),
+                      Column(
+                        children: const [
+                          Text(
+                            'Scan & Digitize Notes',
+                            style: TextStyle(
+                              color: NotesUploadTheme.navyDark,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 18,
+                            ),
+                          ),
+                          Text(
+                            'English Text & Math Formulas OCR',
+                            style: TextStyle(
+                              color: NotesUploadTheme.electricBlue,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(width: 44), // Alignment balance
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  // ── Action Buttons Row ──
+                  Row(
+                    children: [
+                      if (!kIsWeb) ...[
+                        Expanded(
+                          child: _gradientBtn(
+                            label: 'Camera Scan',
+                            icon: Icons.camera_alt_rounded,
+                            colors: NotesUploadTheme.scanGradient,
+                            onTap: () => _pickImage(ImageSource.camera),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                      ],
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _pickImage(ImageSource.gallery),
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: NotesUploadTheme.navyDark,
+                            side: const BorderSide(
+                              color: NotesUploadTheme.silverBorder,
+                              width: 1.4,
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          icon: const Icon(
+                            Icons.image_outlined,
+                            size: 18,
+                            color: NotesUploadTheme.electricBlue,
+                          ),
+                          label: const Text(
+                            'Upload Image',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // ── Main Content Area ──
+                  Expanded(
+                    child: _isProcessing
+                        ? _buildProcessing()
+                        : _extractedText != null
+                            ? _buildResultsPane()
+                            : _imageBytes != null
+                                ? _buildImagePreview()
+                                : _buildEmptyState(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── States ─────────────────────────────────────────────────────────────────
   Widget _buildProcessing() {
-    return const Center(
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        CircularProgressIndicator(color: primary),
-        SizedBox(height: 16),
-        const Text(
-          kIsWeb
-              ? 'Sending image to AI for text extraction…'
-              : 'Extracting text from image…',
-          style: const TextStyle(color: textMuted, fontSize: 14),
-        ),
-      ]),
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: const [
+          CircularProgressIndicator(color: NotesUploadTheme.electricBlue),
+          SizedBox(height: 16),
+          Text(
+            'Analyzing document and extracting mathematical symbols…',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: NotesUploadTheme.textMuted,
+              fontSize: 13.5,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildEmptyState() {
     return Container(
       decoration: BoxDecoration(
-        color: fieldFill,
+        color: NotesUploadTheme.cardFill,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: primary.withValues(alpha: 0.2)),
+        border: Border.all(color: NotesUploadTheme.silverBorder, width: 1.4),
       ),
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Container(
-          width: 80,
-          height: 80,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(colors: [
-              primary.withValues(alpha: 0.15),
-              primary.withValues(alpha: 0.05)
-            ]),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 76,
+            height: 76,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [
+                  NotesUploadTheme.electricBlue.withOpacity(0.2),
+                  NotesUploadTheme.silver.withOpacity(0.1),
+                ],
+              ),
+            ),
+            child: const Icon(
+              Icons.document_scanner_rounded,
+              size: 38,
+              color: NotesUploadTheme.electricBlue,
+            ),
           ),
-          child: const Icon(Icons.document_scanner_rounded,
-              size: 40, color: primary),
-        ),
-        const SizedBox(height: 16),
-        const Text('No Document Selected',
+          const SizedBox(height: 16),
+          const Text(
+            'No Document Selected',
             style: TextStyle(
-                color: textDark, fontWeight: FontWeight.bold, fontSize: 16)),
-        const SizedBox(height: 8),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 40),
-          child: const Text(
-            kIsWeb
-                ? 'Upload a .jpg, .png, .jpeg or .jfif image to extract its text.'
-                : 'Scan with camera or upload an image to extract text.',
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: textMuted, fontSize: 13, height: 1.4),
+              color: NotesUploadTheme.textDark,
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
+            ),
           ),
-        ),
-      ]),
+          const SizedBox(height: 8),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 36),
+            child: Text(
+              'Upload or snap textbook notes, handwriting, or exam formulas (supports English and mathematical symbols).',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: NotesUploadTheme.textMuted,
+                fontSize: 12.5,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -268,23 +626,24 @@ class _NotesUploadScreenState extends State<NotesUploadScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Image thumbnail
         Expanded(
           child: Container(
             decoration: BoxDecoration(
-                color: textDark, borderRadius: BorderRadius.circular(20)),
+              color: NotesUploadTheme.navyDark,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: NotesUploadTheme.silverBorder),
+            ),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(18),
               child: Image.memory(_imageBytes!, fit: BoxFit.contain),
             ),
           ),
         ),
         const SizedBox(height: 14),
-        // Extract button — works on both platforms
         _gradientBtn(
-          label: 'Extract Text',
-          icon: Icons.auto_awesome_rounded,
-          colors: const [Color(0xFF6C3CF7), Color(0xFF06B6D4)],
+          label: 'Extract Text & Math Formulas',
+          icon: Icons.functions_rounded,
+          colors: NotesUploadTheme.scanGradient,
           onTap: _runOcr,
         ),
       ],
@@ -295,86 +654,115 @@ class _NotesUploadScreenState extends State<NotesUploadScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Header row with copy button
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text('Extracted Text',
-                style: TextStyle(
-                    color: textDark,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16)),
-            Row(children: [
-              // Copy All button
-              Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(20),
-                  gradient: const LinearGradient(
-                      colors: [Color(0xFF6C3CF7), Color(0xFF06B6D4)]),
-                ),
-                child: TextButton.icon(
-                  onPressed: _copyToClipboard,
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20)),
+            const Text(
+              'Extracted Content',
+              style: TextStyle(
+                color: NotesUploadTheme.navyDark,
+                fontWeight: FontWeight.w800,
+                fontSize: 16,
+              ),
+            ),
+            Row(
+              children: [
+                // Copy Button
+                IconButton(
+                  icon: const Icon(
+                    Icons.copy_rounded,
+                    size: 20,
+                    color: NotesUploadTheme.electricBlue,
                   ),
-                  icon: const Icon(Icons.copy_rounded, size: 16),
-                  label: const Text('Copy All',
-                      style:
-                          TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  tooltip: 'Copy to clipboard',
+                  onPressed: _copyToClipboard,
                 ),
-              ),
-              const SizedBox(width: 8),
-              // Scan again
-              TextButton.icon(
-                onPressed: () => setState(() {
-                  _extractedText = null;
-                  _imageBytes = null;
-                  _imageFile = null;
-                }),
-                style: TextButton.styleFrom(foregroundColor: textMuted),
-                icon: const Icon(Icons.refresh_rounded, size: 16),
-                label: const Text('New',
-                    style:
-                        TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-              ),
-            ]),
+                // Scan New Document
+                IconButton(
+                  icon: const Icon(
+                    Icons.refresh_rounded,
+                    size: 22,
+                    color: NotesUploadTheme.silver,
+                  ),
+                  tooltip: 'Scan New',
+                  onPressed: () => setState(() {
+                    _extractedText = null;
+                    _imageBytes = null;
+                    _imageFile = null;
+                  }),
+                ),
+              ],
+            ),
           ],
         ),
         const SizedBox(height: 8),
 
-        // Selectable text area — user can select + copy any portion
+        // Text & Formula Display Area
         Expanded(
           child: Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: primary.withValues(alpha: 0.2)),
+              border:
+                  Border.all(color: NotesUploadTheme.silverBorder, width: 1.2),
               boxShadow: [
                 BoxShadow(
-                    color: primary.withValues(alpha: 0.07),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4)),
+                  color: NotesUploadTheme.electricBlue.withOpacity(0.08),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
               ],
             ),
             child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
               child: SelectableText(
                 _extractedText!,
-                style:
-                    const TextStyle(color: textDark, fontSize: 14, height: 1.6),
+                style: const TextStyle(
+                  color: NotesUploadTheme.navyDark,
+                  fontSize: 14,
+                  height: 1.6,
+                  fontFamily: 'monospace',
+                ),
               ),
             ),
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // Save to Existing Subject Folder Button
+        ElevatedButton.icon(
+          onPressed: _isSavingToSubject ? null : _showSaveToSubjectDialog,
+          icon: _isSavingToSubject
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                      color: Colors.white, strokeWidth: 2),
+                )
+              : const Icon(Icons.drive_folder_upload_rounded,
+                  color: Colors.white),
+          label: Text(
+            _isSavingToSubject
+                ? 'Saving to Subject...'
+                : 'Save to Subject Folder',
+            style: const TextStyle(
+              fontSize: 14.5,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: NotesUploadTheme.navyAccent,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            elevation: 0,
           ),
         ),
       ],
     );
   }
-
-  // ── Reusable gradient button ──────────────────────────────────────────────
 
   Widget _gradientBtn({
     required String label,
@@ -384,13 +772,14 @@ class _NotesUploadScreenState extends State<NotesUploadScreen> {
   }) {
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(30),
+        borderRadius: BorderRadius.circular(14),
         gradient: LinearGradient(colors: colors),
         boxShadow: [
           BoxShadow(
-              color: colors.last.withValues(alpha: 0.4),
-              blurRadius: 10,
-              offset: const Offset(0, 4))
+            color: colors.first.withOpacity(0.3),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
         ],
       ),
       child: ElevatedButton.icon(
@@ -401,10 +790,13 @@ class _NotesUploadScreenState extends State<NotesUploadScreen> {
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 14),
           shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
         icon: Icon(icon, size: 18),
-        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+        label: Text(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
+        ),
       ),
     );
   }

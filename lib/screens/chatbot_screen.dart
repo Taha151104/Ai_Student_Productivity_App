@@ -1,13 +1,53 @@
 import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:pdfrx/pdfrx.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/chat_session_model.dart';
 import '../services/ai_service.dart';
 import '../services/firestore_service.dart';
 
-/// UC-19 Ask AI Chatbot — with persistent learner memory, syllabus grounding,
-/// and cellular network crash-resilience.
+class _PdfPageAttachment {
+  final Uint8List imageBytes;
+  final String fileName;
+  final int pageNumber;
+
+  const _PdfPageAttachment({
+    required this.imageBytes,
+    required this.fileName,
+    required this.pageNumber,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🎨 EDIT CHATBOT THEME & COLORS RIGHT HERE:
+// ─────────────────────────────────────────────────────────────────────────────
+class ChatbotTheme {
+  static const Color pageBg = Colors.white; // White Canvas
+  static const Color royalPurple = Color(0xFF7E22CE); // Royal Purple Primary
+  static const Color purpleAccent =
+      Color(0xFFA855F7); // Vibrant Electric Purple
+  static const Color pastelLavender = Color(0xFFF3E8FF); // Soft Pastel Lavender
+  static const Color lavenderBorder = Color(0xFFD8B4FE); // Lavender Outline
+  static const Color userBubble = Color(0xFFE9D5FF); // User: Lavender Box
+  static const Color userText = Color(0xFF0F172A); // User: Black Text
+  static const Color botBubble = Colors.white; // AI: White Dialogue Box
+  static const Color botText = Color(0xFF0F172A); // AI: Black Text
+  static const Color textDark = Color(0xFF1E1348);
+  static const Color textMuted = Color(0xFF64748B);
+
+  // Golden Theme Send & Confirmation Button (Contrasts with Purple)
+  static const Color goldenPrimary = Color(0xFFD97706);
+  static const List<Color> goldenButtonGradient = [
+    Color(0xFFFBBF24),
+    Color(0xFFD97706),
+  ];
+}
+
 class ChatbotScreen extends StatefulWidget {
   const ChatbotScreen({super.key});
 
@@ -16,52 +56,37 @@ class ChatbotScreen extends StatefulWidget {
 }
 
 class _ChatbotScreenState extends State<ChatbotScreen> {
-  // ── Services ──────────────────────────────────────────────────────────────
   final _aiService = AiService();
   final _firestoreService = FirestoreService();
   final _auth = FirebaseAuth.instance;
   final _firestore = FirebaseFirestore.instance;
 
-  // ── Controllers ───────────────────────────────────────────────────────────
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
 
-  // ── State ─────────────────────────────────────────────────────────────────
   final List<ChatMessage> _messages = [];
-
-  /// Conversation history in OpenAI/Gemini compatible format.
   final List<Map<String, String>> _history = [];
-
-  /// Learner memories loaded from Firestore: { key → value }.
   Map<String, String> _memories = {};
 
   bool _isLoading = false;
   bool _showMemories = false;
+  bool _languageReady = false;
   int _activeSubjectCount = 0;
+  String _preferredLanguage = 'English';
 
-  // ── Design tokens ─────────────────────────────────────────────────────────
-  static const Color primary = Color(0xFF6C3CF7);
-  static const Color pageBg = Color(0xFFEEEBFD);
-  static const Color fieldFill = Color(0xFFF0EDFE);
-  static const Color textDark = Color(0xFF1A1040);
-  static const Color textMuted = Color(0xFF5B5E7A);
-  static const Color userBubble = Color(0xFF6C3CF7);
-  static const Color botBubble = Color(0xFFFFFFFF);
+  static const String _languagePreferenceKey = 'chat_preferred_language';
 
   static const Map<String, String> _memoryLabels = {
     'name': '👤 Name',
-    'education_level': '🎓 Education level',
+    'education_level': '🎓 Education',
     'institution': '🏫 Institution',
     'subject': '📚 Subject',
-    'learning_style': '🧠 Learning style',
+    'learning_style': '🧠 Style',
     'preferred_language': '🌐 Language',
     'study_goal': '🎯 Goal',
     'weakness': '⚠️ Weakness',
     'strength': '✅ Strength',
-    'age': '🎂 Age',
   };
-
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   @override
   void initState() {
@@ -69,14 +94,68 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     _messages.add(
       ChatMessage(
         sender: 'ai',
-        text: 'Hello! I\'m your AI study tutor. 🎓\n\n'
-            'I have direct access to your uploaded semester subjects, textbooks, and notes, '
-            'and I\'ll remember your learning preferences to give syllabus-accurate answers.',
+        text: 'Hi! I\'m your AI study assistant. 😊\n\n'
+            'What would you like to talk about?',
         timestamp: DateTime.now(),
       ),
     );
+    _loadLanguagePreference();
     _loadMemories();
     _countActiveSubjects();
+  }
+
+  Future<void> _loadLanguagePreference() async {
+    final preferences = await SharedPreferences.getInstance();
+    final savedLanguage = preferences.getString(_languagePreferenceKey);
+    if (savedLanguage != null) {
+      if (mounted) {
+        setState(() {
+          _preferredLanguage = savedLanguage;
+          _languageReady = true;
+        });
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    final language = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Choose your chat language'),
+        content: const Text(
+          'I’ll use your choice consistently for conversations. Study answers can keep key technical terms in English.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'English'),
+            child: const Text('English'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'Urdu'),
+            child: const Text('اردو'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'Roman Urdu'),
+            child: const Text('Roman Urdu'),
+          ),
+        ],
+      ),
+    );
+    final selectedLanguage = language ?? 'English';
+    await preferences.setString(_languagePreferenceKey, selectedLanguage);
+    if (mounted) {
+      setState(() {
+        _preferredLanguage = selectedLanguage;
+        _languageReady = true;
+        _messages[0] = ChatMessage(
+          sender: 'ai',
+          text:
+              'Hi! I’m your AI study assistant. I’ll reply in $selectedLanguage. You can ask me to switch languages whenever you like.',
+          timestamp: DateTime.now(),
+        );
+      });
+    }
   }
 
   @override
@@ -102,8 +181,6 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     } catch (_) {}
   }
 
-  // ── Memory Management ─────────────────────────────────────────────────────
-
   Future<void> _loadMemories() async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return;
@@ -112,9 +189,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
           .loadMemories(uid)
           .timeout(const Duration(seconds: 5));
       if (mounted) setState(() => _memories = facts);
-    } catch (e) {
-      debugPrint('Memory load error (non-fatal): $e');
-    }
+    } catch (_) {}
   }
 
   Future<void> _extractAndSaveMemories(String userMessage) async {
@@ -133,191 +208,295 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
             .timeout(const Duration(seconds: 4));
         _memories[entry.key] = entry.value;
       }
-
       if (mounted) setState(() {});
-    } catch (e) {
-      debugPrint('Memory extraction skipped on cellular: $e');
-    }
+    } catch (_) {}
   }
 
   Future<void> _deleteMemory(String key) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return;
     try {
-      await _firestoreService
-          .deleteMemory(uid, key)
-          .timeout(const Duration(seconds: 5));
+      await _firestoreService.deleteMemory(uid, key);
       setState(() => _memories.remove(key));
-    } catch (e) {
-      debugPrint('Memory delete error: $e');
-    }
+    } catch (_) {}
   }
 
-  // ── Subject & Syllabus Knowledge Retrieval (Crash-Resilient for Mobile Data) ──
-
+  // ── Load Grounding Context from User's Subject Folders ────────────────────
   Future<String> _loadUserSubjectContext() async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return '';
 
     try {
       final buffer = StringBuffer();
-
-      // 1. Fetch user subjects with a strict 5-second cellular timeout and limit
-      var subjectsSnap = await _firestore
+      final subjectsSnap = await _firestore
           .collection('users')
           .doc(uid)
           .collection('subjects')
-          .limit(4)
+          .limit(6)
           .get()
           .timeout(const Duration(seconds: 5));
-
-      if (subjectsSnap.docs.isEmpty) {
-        subjectsSnap = await _firestore
-            .collection('subjects')
-            .where('userId', isEqualTo: uid)
-            .limit(4)
-            .get()
-            .timeout(const Duration(seconds: 5));
-      }
 
       if (subjectsSnap.docs.isEmpty) return '';
 
       for (final subjectDoc in subjectsSnap.docs) {
-        final subjectName = subjectDoc['name'] ?? 'Course Subject';
-
-        // Limit to 2 most recent files per subject to conserve mobile data bandwidth
+        final subjectName = subjectDoc['name'] ?? 'Subject Folder';
         final filesSnap = await subjectDoc.reference
             .collection('files')
             .orderBy('uploadedAt', descending: true)
-            .limit(2)
+            .limit(3)
             .get()
             .timeout(const Duration(seconds: 4));
 
         if (filesSnap.docs.isNotEmpty) {
-          buffer.writeln('\n[SUBJECT FOLDER: $subjectName]');
+          buffer.writeln('\n[COURSE REPOSITORY: $subjectName]');
           for (final fileDoc in filesSnap.docs) {
-            final fileName = fileDoc['fileName'] ?? 'Document';
+            final fileName = fileDoc['fileName'] ?? 'Handout';
             final content =
                 (fileDoc['extractedContent'] ?? fileDoc['preview'] ?? '')
                     .toString()
                     .trim();
 
             if (content.isNotEmpty) {
-              // Cap at 1,500 characters to keep payload light and fast on mobile data
-              final safeText = content.length > 1500
-                  ? '${content.substring(0, 1500)}...'
+              final snippet = content.length > 1800
+                  ? '${content.substring(0, 1800)}...'
                   : content;
-              buffer.writeln('--- File: $fileName ---');
-              buffer.writeln(safeText);
-              buffer.writeln('-----------------------\n');
+              buffer.writeln('Document ($fileName): $snippet');
             }
           }
         }
       }
       return buffer.toString();
-    } catch (e) {
-      debugPrint('Cellular subject context skipped: $e');
-      return ''; // Gracefully proceed without files if cellular data timed out
+    } catch (_) {
+      return '';
     }
   }
 
-  /// Builds the personalized system instructions for the AI model.
+  Future<_PdfPageAttachment?> _loadPdfPageForQuestion(
+    String question,
+    int pageNumber,
+  ) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return null;
+
+    final subjects = await _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('subjects')
+        .get()
+        .timeout(const Duration(seconds: 8));
+
+    final matchingFiles = <Map<String, dynamic>>[];
+    final questionLower = question.toLowerCase();
+    for (final subject in subjects.docs) {
+      final files = await subject.reference
+          .collection('files')
+          .where('fileType', isEqualTo: 'pdf')
+          .get()
+          .timeout(const Duration(seconds: 8));
+      for (final file in files.docs) {
+        final data = file.data();
+        final path = (data['originalStoragePath'] ?? '').toString();
+        final pageText = (data['extractedContent'] ?? '').toString();
+        final pageCount = data['pageCount'];
+        final hasPage = pageCount is int
+            ? pageCount >= pageNumber
+            : pageText.contains('[Page $pageNumber]');
+        if (path.isEmpty || !hasPage) continue;
+        matchingFiles.add({...data, 'originalStoragePath': path});
+      }
+    }
+
+    if (matchingFiles.isEmpty) return null;
+    final namedMatches = matchingFiles.where((file) {
+      final name = (file['fileName'] ?? '')
+          .toString()
+          .toLowerCase()
+          .replaceAll('.pdf', '');
+      return name.isNotEmpty && questionLower.contains(name);
+    }).toList();
+    if (namedMatches.isEmpty && matchingFiles.length > 1) return null;
+    final file =
+        namedMatches.isEmpty ? matchingFiles.first : namedMatches.first;
+    final bytes = await FirebaseStorage.instance
+        .ref(file['originalStoragePath'] as String)
+        .getData(20 * 1024 * 1024);
+    if (bytes == null) return null;
+
+    await pdfrxFlutterInitialize();
+    final document = await PdfDocument.openData(
+      bytes,
+      sourceName: (file['fileName'] ?? 'handout.pdf').toString(),
+    );
+    try {
+      if (pageNumber < 1 || pageNumber > document.pages.length) return null;
+      final page = document.pages[pageNumber - 1];
+      final pageImage = await page.render(fullWidth: 1400, fullHeight: 1800);
+      if (pageImage == null) return null;
+      try {
+        final image = await pageImage.createImage();
+        try {
+          final png = await image.toByteData(format: ui.ImageByteFormat.png);
+          if (png == null) return null;
+          return _PdfPageAttachment(
+            imageBytes: png.buffer.asUint8List(),
+            fileName: (file['fileName'] ?? 'handout.pdf').toString(),
+            pageNumber: pageNumber,
+          );
+        } finally {
+          image.dispose();
+        }
+      } finally {
+        pageImage.dispose();
+      }
+    } finally {
+      document.dispose();
+    }
+  }
+
+  // ── Multilingual & Academic System Prompt ──────────────────────────────────
   String _buildSystemPrompt() {
     final buffer = StringBuffer();
 
     buffer.writeln(
-      'You are an intelligent, academic AI study tutor for a university student productivity app. '
-      'Your mission is to help students excel in their courses by explaining concepts clearly, '
-      'answering syllabus-specific exam questions, solving problems step-by-step, and providing concise study strategies.',
+      'You are a friendly, approachable AI study assistant who can also chat about other topics.\n\n'
+      'CONVERSATION STYLE:\n'
+      '1. Be warm, relaxed, and respectful. Follow the user\'s lead and respond naturally.\n'
+      '2. Do not assume the user is struggling, has a problem, or wants study advice or a plan.\n'
+      '3. For a simple greeting, greet them back briefly. At most, add one gentle, optional invitation to continue; do not ask several questions or ask about their plans or personal life unless they bring it up.\n'
+      '4. Avoid unsolicited advice, pressure, over-familiarity, and repeatedly offering help. Answer what they actually asked, and let them choose what to discuss.\n'
+      '5. Do not mention remembered personal details unless they are directly relevant to the user\'s request.\n\n'
+      'MULTILINGUAL & NUMERICAL ABILITY:\n'
+      '1. Fluent in English, Urdu (اردو), and Roman Urdu (e.g., "Mujhe ye concept asan alfaz mein samjha dein", "Formula explain karo").\n'
+      '2. Understand numbers, equations, mathematical symbols, and calculations accurately.\n'
+      '3. Use $_preferredLanguage consistently, even when the user mixes languages or uses short phrases. Do not randomly switch languages or infer a new preference from a single message.\n'
+      '4. For study topics, keep important technical terms in English and explain them in $_preferredLanguage. If the user explicitly asks to switch languages, honor that request.\n\n'
+      'SCOPE & KNOWLEDGE BASE:\n'
+      '1. When relevant to a course-related question, use the student\'s uploaded subject materials and lecture files to ground your answer. Do not bring up those materials unless they are relevant to the request.\n'
+      '2. You are ALSO knowledgeable beyond the syllabus. If the student asks general, non-study questions (everyday advice, tech, history, logic, productivity, casual chat), answer accurately, intelligently, and helpfully without refusing.',
     );
 
     if (_memories.isNotEmpty) {
-      buffer.writeln('\n--- What you know about this student ---');
+      buffer.writeln('\nLearner profile:');
       for (final e in _memories.entries) {
-        final label = _memoryLabels[e.key] ?? e.key;
-        buffer.writeln('$label: ${e.value}');
+        if (e.key == 'preferred_language') continue;
+        buffer.writeln('- ${e.key}: ${e.value}');
       }
-      buffer.writeln(
-        '\nUse these learner facts to personalize every response. Do NOT recite '
-        'these facts back to the student unless asked.',
-      );
     }
 
     return buffer.toString();
   }
 
-  // ── Messaging ─────────────────────────────────────────────────────────────
-
   Future<void> _sendMessage() async {
     final text = _inputController.text.trim();
     if (text.isEmpty || _isLoading) return;
+    if (!_languageReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose your chat language first.')),
+      );
+      return;
+    }
 
     setState(() {
       _messages.add(
-          ChatMessage(sender: 'user', text: text, timestamp: DateTime.now()));
+        ChatMessage(sender: 'user', text: text, timestamp: DateTime.now()),
+      );
       _isLoading = true;
       _inputController.clear();
     });
     _scrollToBottom();
 
     try {
-      // 1. Extract learner memories in background (non-blocking)
       _extractAndSaveMemories(text);
-
-      // 2. Fetch syllabus context safely
       final syllabusContext = await _loadUserSubjectContext();
+      Uint8List? diagramPageImage;
+      int? requestedPdfPage;
+      final asksAboutVisual = RegExp(
+        r'\b(diagram|figure|chart|graph|illustration)\b',
+        caseSensitive: false,
+      ).hasMatch(text);
+      if (asksAboutVisual) {
+        final pageMatches = RegExp(
+          r'\bpage(?:\s+number)?\s+(\d+)\b|\bp\.?\s*(\d+)\b',
+          caseSensitive: false,
+        ).firstMatch(text);
+        final pageNumber =
+            int.tryParse(pageMatches?.group(1) ?? pageMatches?.group(2) ?? '');
+        if (pageNumber == null) {
+          const reply =
+              'Please mention the PDF page number so I can inspect the correct diagram.';
+          if (mounted) {
+            setState(() => _messages.add(
+                  ChatMessage(
+                      sender: 'ai', text: reply, timestamp: DateTime.now()),
+                ));
+          }
+          return;
+        }
+        requestedPdfPage = pageNumber;
+        final page = await _loadPdfPageForQuestion(text, pageNumber);
+        if (page == null) {
+          final reply =
+              'I couldn’t find an accessible uploaded PDF page $pageNumber. Upload the PDF to a subject folder and include the PDF filename if that folder has multiple handouts.';
+          if (mounted) {
+            setState(() => _messages.add(
+                  ChatMessage(
+                      sender: 'ai', text: reply, timestamp: DateTime.now()),
+                ));
+          }
+          return;
+        }
+        diagramPageImage = page.imageBytes;
+      }
 
-      // 3. Construct prompt with syllabus text
       String promptToSend = text;
       if (syllabusContext.trim().isNotEmpty) {
         promptToSend = '''
-STUDENT'S UPLOADED COURSE MATERIALS & SYLLABUS FILES:
+STUDENT'S UPLOADED SUBJECT FILES & HANDOUTS:
 """
 $syllabusContext
 """
 
-STUDENT'S QUESTION:
+STUDENT'S QUERY:
 $text
 
-INSTRUCTION: 
-Answer the student's question accurately using their uploaded course materials and syllabus files above whenever relevant. If they ask for an outline, summary, or specific topics from their files, cite and extract them directly from the text provided above.
+INSTRUCTION: If this query references course concepts or handouts from above, answer accurately using their syllabus files. If it is a general or non-study query, answer comprehensively with your broader knowledge.
 ''';
+      }
+      if (diagramPageImage != null) {
+        promptToSend =
+            'The attached image is page $requestedPdfPage of the uploaded PDF. Explain the visible diagram using the image and the syllabus text where relevant. Identify the source page in your answer.\n\n$text\n\n$syllabusContext';
       }
 
       final systemPrompt = _buildSystemPrompt();
 
-      // 4. Send to AI Service with a safe 20-second timeout
       final reply = await _aiService
           .askChatbot(
-        promptToSend,
-        systemPrompt: systemPrompt,
-        history: List.of(_history),
-      )
+            promptToSend,
+            systemPrompt: systemPrompt,
+            history: List.of(_history),
+            imageBytes: diagramPageImage,
+          )
           .timeout(
-        const Duration(seconds: 20),
-        onTimeout: () {
-          return "The mobile network took a little long to respond. Please check your data connection or ask a more specific question!";
-        },
-      );
+            const Duration(seconds: 22),
+            onTimeout: () =>
+                'Connection took a bit longer than expected. Please check your network and try again!',
+          );
 
-      // Maintain conversational history (keep last 8 turns to conserve memory)
       _history.add({'role': 'user', 'content': text});
       _history.add({'role': 'assistant', 'content': reply});
-      if (_history.length > 16) {
-        _history.removeRange(0, 2);
-      }
+      if (_history.length > 16) _history.removeRange(0, 2);
 
       if (mounted) {
         setState(() => _messages.add(
-            ChatMessage(sender: 'ai', text: reply, timestamp: DateTime.now())));
+              ChatMessage(sender: 'ai', text: reply, timestamp: DateTime.now()),
+            ));
       }
     } catch (e) {
-      debugPrint('Chatbot cellular error: $e');
       if (mounted) {
         setState(() => _messages.add(ChatMessage(
               sender: 'ai',
               text:
-                  'Network connection hiccup. Please verify your mobile data is active and try again.',
+                  'Unable to reach the assistant. Please check your data connection.',
               timestamp: DateTime.now(),
             )));
       }
@@ -339,143 +518,161 @@ Answer the student's question accurately using their uploaded course materials a
     });
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
-
+  // ── Build UI ───────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: pageBg,
-      appBar: _buildAppBar(),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Memory drawer
-            AnimatedSize(
-              duration: const Duration(milliseconds: 250),
-              curve: Curves.easeInOut,
-              child: _showMemories
-                  ? _buildMemoryDrawer()
-                  : const SizedBox.shrink(),
-            ),
-
-            // Chat messages
-            Expanded(child: _buildMessageList()),
-
-            // Typing indicator
-            if (_isLoading) _buildTypingIndicator(),
-
-            // Input bar with active syllabus indicator
-            _buildInputBar(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ── AppBar ────────────────────────────────────────────────────────────────
-
-  AppBar _buildAppBar() {
-    return AppBar(
-      backgroundColor: pageBg,
-      elevation: 0,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: textDark, size: 22),
-        onPressed: () => Navigator.maybePop(context),
-      ),
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
+      backgroundColor: ChatbotTheme.pageBg,
+      body: Stack(
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                  colors: [Color(0xFFA855F7), Color(0xFF6C3CF7)]),
+          // Ambient Pastel Purple Designs
+          Positioned(
+            top: -40,
+            left: -30,
+            child: Container(
+              width: 200,
+              height: 200,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: ChatbotTheme.pastelLavender.withOpacity(0.55),
+              ),
             ),
-            child:
-                const Icon(Icons.auto_awesome, color: Colors.white, size: 16),
           ),
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('AI Study Tutor',
-                  style: TextStyle(
-                      color: textDark,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 17)),
-              if (_activeSubjectCount > 0)
-                Text('$_activeSubjectCount subjects linked',
-                    style: const TextStyle(
-                        color: primary,
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.bold)),
-            ],
+          Positioned(
+            top: 220,
+            right: -60,
+            child: Container(
+              width: 180,
+              height: 180,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: ChatbotTheme.purpleAccent.withOpacity(0.06),
+              ),
+            ),
           ),
-        ],
-      ),
-      centerTitle: true,
-      actions: [
-        Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: Tooltip(
-            message: 'Learner memories',
-            child: Stack(
-              alignment: Alignment.topRight,
+          Positioned(
+            bottom: 90,
+            left: -40,
+            child: Container(
+              width: 160,
+              height: 160,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: ChatbotTheme.pastelLavender.withOpacity(0.4),
+              ),
+            ),
+          ),
+
+          SafeArea(
+            child: Column(
               children: [
-                IconButton(
-                  icon: Icon(
-                    Icons.psychology_rounded,
-                    color: _showMemories ? primary : textMuted,
-                    size: 26,
-                  ),
-                  onPressed: () =>
-                      setState(() => _showMemories = !_showMemories),
+                _buildHeader(),
+                // Memory Drawer
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeInOut,
+                  child: _showMemories
+                      ? _buildMemoryDrawer()
+                      : const SizedBox.shrink(),
                 ),
-                if (_memories.isNotEmpty)
-                  Positioned(
-                    top: 6,
-                    right: 6,
-                    child: Container(
-                      width: 16,
-                      height: 16,
-                      decoration: const BoxDecoration(
-                          shape: BoxShape.circle, color: primary),
-                      child: Center(
-                        child: Text(
-                          _memories.length.toString(),
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ),
-                  ),
+                // Messages List
+                Expanded(child: _buildMessageList()),
+                // Typing Indicator
+                if (_isLoading) _buildTypingIndicator(),
+                // Input Bar with Golden Send Button
+                _buildInputBar(),
               ],
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
-  // ── Memory Drawer ─────────────────────────────────────────────────────────
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.92),
+        border: const Border(
+          bottom: BorderSide(color: Color(0xFFF1F5F9)),
+        ),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back,
+                color: ChatbotTheme.textDark, size: 22),
+            onPressed: () => Navigator.maybePop(context),
+          ),
+          Container(
+            width: 36,
+            height: 36,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [ChatbotTheme.purpleAccent, ChatbotTheme.royalPurple],
+              ),
+            ),
+            child:
+                const Icon(Icons.auto_awesome, color: Colors.white, size: 18),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'AI Study Tutor',
+                  style: TextStyle(
+                    color: ChatbotTheme.textDark,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16.5,
+                  ),
+                ),
+                Text(
+                  _activeSubjectCount > 0
+                      ? '$_activeSubjectCount subjects connected • EN / UR / رومن'
+                      : 'Multilingual Study Assistant',
+                  style: const TextStyle(
+                    color: ChatbotTheme.royalPurple,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: Icon(
+              Icons.psychology_rounded,
+              color: _showMemories
+                  ? ChatbotTheme.royalPurple
+                  : ChatbotTheme.textMuted,
+              size: 26,
+            ),
+            tooltip: 'Learner Memory',
+            onPressed: () => setState(() => _showMemories = !_showMemories),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildMemoryDrawer() {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: primary.withOpacity(0.2)),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: ChatbotTheme.lavenderBorder),
         boxShadow: [
           BoxShadow(
-              color: primary.withOpacity(0.08),
-              blurRadius: 12,
-              offset: const Offset(0, 4)),
+            color: ChatbotTheme.royalPurple.withOpacity(0.08),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
         ],
       ),
       child: Column(
@@ -483,13 +680,17 @@ Answer the student's question accurately using their uploaded course materials a
         children: [
           Row(
             children: [
-              const Icon(Icons.psychology_rounded, color: primary, size: 18),
+              const Icon(Icons.psychology_rounded,
+                  color: ChatbotTheme.royalPurple, size: 18),
               const SizedBox(width: 8),
-              const Text('What I know about you',
-                  style: TextStyle(
-                      color: textDark,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14)),
+              const Text(
+                'Personalized Study Profile',
+                style: TextStyle(
+                  color: ChatbotTheme.textDark,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13.5,
+                ),
+              ),
               const Spacer(),
               if (_memories.isNotEmpty)
                 TextButton(
@@ -501,33 +702,33 @@ Answer the student's question accurately using their uploaded course materials a
                     }
                     setState(() => _memories.clear());
                   },
-                  style: TextButton.styleFrom(
-                      foregroundColor: Colors.red.shade400,
-                      padding: EdgeInsets.zero),
-                  child:
-                      const Text('Clear all', style: TextStyle(fontSize: 12)),
+                  child: const Text('Clear',
+                      style: TextStyle(color: Colors.red, fontSize: 12)),
                 ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           if (_memories.isEmpty)
             const Text(
-              'No personalized memories yet. Chat with me and I\'ll learn your study goals automatically.',
-              style: TextStyle(color: textMuted, fontSize: 13, height: 1.4),
+              'No learned preferences yet. Chat naturally and I will personalize your answers.',
+              style: TextStyle(color: ChatbotTheme.textMuted, fontSize: 12.5),
             )
           else
             Wrap(
               spacing: 8,
-              runSpacing: 8,
+              runSpacing: 6,
               children: _memories.entries.map((e) {
                 final label = _memoryLabels[e.key] ?? e.key;
                 return Chip(
-                  backgroundColor: fieldFill,
-                  side: BorderSide(color: primary.withOpacity(0.2)),
-                  label: Text('$label: ${e.value}',
-                      style: const TextStyle(color: textDark, fontSize: 12)),
+                  backgroundColor: ChatbotTheme.pastelLavender,
+                  side: const BorderSide(color: ChatbotTheme.lavenderBorder),
+                  label: Text(
+                    '$label: ${e.value}',
+                    style: const TextStyle(
+                        color: ChatbotTheme.textDark, fontSize: 11.5),
+                  ),
                   deleteIcon: const Icon(Icons.close_rounded,
-                      size: 14, color: textMuted),
+                      size: 14, color: ChatbotTheme.textMuted),
                   onDeleted: () => _deleteMemory(e.key),
                 );
               }).toList(),
@@ -537,12 +738,11 @@ Answer the student's question accurately using their uploaded course materials a
     );
   }
 
-  // ── Message List ──────────────────────────────────────────────────────────
-
+  // ── Dialogue Boxes: White for AI, Lavender for User ────────────────────────
   Widget _buildMessageList() {
     return ListView.builder(
       controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
       itemCount: _messages.length,
       itemBuilder: (context, i) {
         final msg = _messages[i];
@@ -551,32 +751,44 @@ Answer the student's question accurately using their uploaded course materials a
         return Align(
           alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
           child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 5),
+            margin: const EdgeInsets.symmetric(vertical: 6),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.78),
+              maxWidth: MediaQuery.of(context).size.width * 0.82,
+            ),
             decoration: BoxDecoration(
-              color: isUser ? userBubble : botBubble,
+              // User: Lavender, AI: White
+              color: isUser ? ChatbotTheme.userBubble : ChatbotTheme.botBubble,
               borderRadius: BorderRadius.only(
                 topLeft: const Radius.circular(18),
                 topRight: const Radius.circular(18),
                 bottomLeft: Radius.circular(isUser ? 18 : 4),
                 bottomRight: Radius.circular(isUser ? 4 : 18),
               ),
+              border: Border.all(
+                color: isUser
+                    ? ChatbotTheme.lavenderBorder
+                    : const Color(0xFFE2E8F0),
+                width: 1.2,
+              ),
               boxShadow: [
                 BoxShadow(
-                  color: (isUser ? primary : Colors.black).withOpacity(0.08),
+                  color: isUser
+                      ? ChatbotTheme.royalPurple.withOpacity(0.08)
+                      : Colors.black.withOpacity(0.04),
                   blurRadius: 8,
                   offset: const Offset(0, 3),
                 ),
               ],
             ),
-            child: Text(
+            child: SelectableText(
               msg.text,
               style: TextStyle(
-                  color: isUser ? Colors.white : textDark,
-                  fontSize: 14,
-                  height: 1.5),
+                // Black text for both
+                color: isUser ? ChatbotTheme.userText : ChatbotTheme.botText,
+                fontSize: 14,
+                height: 1.5,
+              ),
             ),
           ),
         );
@@ -584,89 +796,92 @@ Answer the student's question accurately using their uploaded course materials a
     );
   }
 
-  // ── Typing Indicator ──────────────────────────────────────────────────────
-
   Widget _buildTypingIndicator() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-      child: Row(children: [
-        _dot(0),
-        _dot(150),
-        _dot(300),
-        const SizedBox(width: 10),
-        const Text('Consulting syllabus & formulating answer…',
-            style: TextStyle(color: textMuted, fontSize: 12.5)),
-      ]),
-    );
-  }
-
-  Widget _dot(int delayMs) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: Duration(milliseconds: 600 + delayMs),
-      curve: Curves.easeInOut,
-      builder: (_, v, __) => Container(
-        width: 7,
-        height: 7,
-        margin: const EdgeInsets.only(right: 4),
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: primary.withOpacity(0.3 + 0.7 * v),
-        ),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+      child: Row(
+        children: const [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              color: ChatbotTheme.royalPurple,
+              strokeWidth: 2,
+            ),
+          ),
+          SizedBox(width: 10),
+          Text(
+            'Consulting syllabus notes & formulating response…',
+            style: TextStyle(
+              color: ChatbotTheme.textMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  // ── Input Bar ─────────────────────────────────────────────────────────────
-
+  // ── Input Bar with Golden Send Button ──────────────────────────────────────
   Widget _buildInputBar() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: const Border(top: BorderSide(color: Color(0xFFF1F5F9))),
+      ),
       child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
         decoration: BoxDecoration(
-          color: fieldFill,
-          borderRadius: BorderRadius.circular(30),
-          border: Border.all(color: primary.withOpacity(0.25)),
-          boxShadow: [
-            BoxShadow(
-                color: primary.withOpacity(0.08),
-                blurRadius: 12,
-                offset: const Offset(0, 4)),
-          ],
+          color: ChatbotTheme.pastelLavender.withOpacity(0.4),
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: ChatbotTheme.lavenderBorder, width: 1.3),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Row(
           children: [
             Expanded(
               child: TextField(
                 controller: _inputController,
-                style: const TextStyle(color: textDark, fontSize: 15),
+                style: const TextStyle(
+                    color: ChatbotTheme.textDark, fontSize: 14.5),
                 maxLines: null,
-                decoration: InputDecoration(
-                  hintText: 'Ask about any of your subjects or notes…',
-                  hintStyle: TextStyle(color: textMuted.withOpacity(0.7)),
+                decoration: const InputDecoration(
+                  hintText: 'Ask in English, Urdu, or Roman Urdu…',
+                  hintStyle:
+                      TextStyle(color: ChatbotTheme.textMuted, fontSize: 13),
                   border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
                 ),
-                textInputAction: TextInputAction.send,
                 onSubmitted: (_) {
                   if (!_isLoading) _sendMessage();
                 },
               ),
             ),
+            const SizedBox(width: 8),
+            // Golden Contrast Send Button
             Container(
-              width: 38,
-              height: 38,
-              decoration: const BoxDecoration(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: LinearGradient(
-                    colors: [Color(0xFF6C3CF7), Color(0xFF06B6D4)]),
+                gradient: const LinearGradient(
+                  colors: ChatbotTheme.goldenButtonGradient,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: ChatbotTheme.goldenPrimary.withOpacity(0.35),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
               ),
               child: IconButton(
                 padding: EdgeInsets.zero,
-                onPressed: _isLoading ? null : _sendMessage,
                 icon: const Icon(Icons.send_rounded,
-                    color: Colors.white, size: 18),
+                    color: Colors.white, size: 20),
+                onPressed: _isLoading ? null : _sendMessage,
               ),
             ),
           ],

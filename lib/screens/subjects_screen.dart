@@ -1,12 +1,79 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart'; // Provides kIsWeb
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import '../services/ai_service.dart';
+
+Future<void> _deleteLegacyStorageObject(String path) async {
+  try {
+    await FirebaseStorage.instance.ref(path).delete();
+  } on FirebaseException catch (error) {
+    if (error.code != 'object-not-found') rethrow;
+  }
+}
+
+class SubjectFolderStyle {
+  final Color accent;
+  final Color background;
+  final Color border;
+
+  const SubjectFolderStyle({
+    required this.accent,
+    required this.background,
+    required this.border,
+  });
+}
+
+const _subjectFolderStyles = [
+  SubjectFolderStyle(
+    accent: Color(0xFF7C3AED),
+    background: Color(0xFFF3E8FF),
+    border: Color(0xFFD8B4FE),
+  ),
+  SubjectFolderStyle(
+    accent: Color(0xFF0284C7),
+    background: Color(0xFFE0F2FE),
+    border: Color(0xFF7DD3FC),
+  ),
+  SubjectFolderStyle(
+    accent: Color(0xFF059669),
+    background: Color(0xFFD1FAE5),
+    border: Color(0xFF6EE7B7),
+  ),
+  SubjectFolderStyle(
+    accent: Color(0xFFD97706),
+    background: Color(0xFFFEF3C7),
+    border: Color(0xFFFCD34D),
+  ),
+  SubjectFolderStyle(
+    accent: Color(0xFFE11D48),
+    background: Color(0xFFFFE4E6),
+    border: Color(0xFFFDA4AF),
+  ),
+  SubjectFolderStyle(
+    accent: Color(0xFF4F46E5),
+    background: Color(0xFFE0E7FF),
+    border: Color(0xFFA5B4FC),
+  ),
+  SubjectFolderStyle(
+    accent: Color(0xFF0D9488),
+    background: Color(0xFFCCFBF1),
+    border: Color(0xFF5EEAD4),
+  ),
+  SubjectFolderStyle(
+    accent: Color(0xFFDB2777),
+    background: Color(0xFFFCE7F3),
+    border: Color(0xFFF9A8D4),
+  ),
+];
+
+SubjectFolderStyle subjectFolderStyleAt(int index) =>
+    _subjectFolderStyles[index % _subjectFolderStyles.length];
 
 class SubjectsScreen extends StatefulWidget {
   const SubjectsScreen({super.key});
@@ -22,8 +89,6 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
   bool _isAdding = false;
 
   static const Color primary = Color(0xFF6C3CF7);
-  static const Color pageBg = Color(0xFFF3F0FF);
-  static const Color fieldFill = Colors.white;
   static const Color textDark = Color(0xFF1A1040);
   static const Color textMuted = Color(0xFF6E6B82);
 
@@ -111,6 +176,11 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
           .doc(docId);
       final filesSnap = await subjectRef.collection('files').get();
       for (final doc in filesSnap.docs) {
+        final storagePath =
+            (doc.data()['originalStoragePath'] ?? '').toString();
+        if (storagePath.isNotEmpty) {
+          await _deleteLegacyStorageObject(storagePath);
+        }
         await doc.reference.delete();
       }
       await subjectRef.delete();
@@ -137,9 +207,9 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
     final user = _auth.currentUser;
 
     return Scaffold(
-      backgroundColor: pageBg,
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: pageBg,
+        backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: textDark, size: 22),
@@ -172,132 +242,158 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
                   children: [
                     // Creation bar & limit indicator
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 6, 18, 14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text(
-                                'Semester Subjects',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                  color: textMuted,
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 3,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: folderCount >= maxFolders
-                                      ? Colors.orange.withOpacity(0.15)
-                                      : primary.withOpacity(0.12),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Text(
-                                  '$folderCount / $maxFolders Folders',
-                                  style: TextStyle(
-                                    color: folderCount >= maxFolders
-                                        ? Colors.deepOrange
-                                        : primary,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 11.5,
-                                  ),
-                                ),
-                              ),
-                            ],
+                      padding: const EdgeInsets.fromLTRB(18, 10, 18, 14),
+                      child: Container(
+                        padding: const EdgeInsets.all(15),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFFBEB),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: const Color(0xFFFDE68A),
+                            width: 1.2,
                           ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _controller,
-                                  enabled:
-                                      folderCount < maxFolders && !_isAdding,
-                                  style: const TextStyle(
-                                    color: textDark,
-                                    fontSize: 14.5,
-                                  ),
-                                  decoration: InputDecoration(
-                                    hintText: folderCount >= maxFolders
-                                        ? 'Maximum 8 folders reached'
-                                        : 'e.g. CS101, Data Structures...',
-                                    hintStyle: const TextStyle(
-                                      color: textMuted,
-                                      fontSize: 13.5,
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFF59E0B)
+                                  .withValues(alpha: 0.07),
+                              blurRadius: 14,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Row(
+                                  children: [
+                                    Icon(Icons.auto_awesome_rounded,
+                                        color: Color(0xFFD97706), size: 17),
+                                    SizedBox(width: 7),
+                                    Text(
+                                      'Semester Subjects',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 13,
+                                        color: textDark,
+                                      ),
                                     ),
-                                    filled: true,
-                                    fillColor: fieldFill,
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
+                                  ],
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: folderCount >= maxFolders
+                                        ? const Color(0xFFFFE4E6)
+                                        : const Color(0xFFF3E8FF),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    '$folderCount / $maxFolders Folders',
+                                    style: TextStyle(
+                                      color: folderCount >= maxFolders
+                                          ? const Color(0xFFE11D48)
+                                          : primary,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _controller,
+                                    enabled:
+                                        folderCount < maxFolders && !_isAdding,
+                                    style: const TextStyle(
+                                      color: textDark,
+                                      fontSize: 14.5,
+                                    ),
+                                    decoration: InputDecoration(
+                                      hintText: folderCount >= maxFolders
+                                          ? 'Maximum 8 folders reached'
+                                          : 'e.g. CS101, Data Structures...',
+                                      hintStyle: const TextStyle(
+                                        color: textMuted,
+                                        fontSize: 13.5,
+                                      ),
+                                      filled: true,
+                                      fillColor: Colors.white,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 14,
+                                      ),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                        borderSide: BorderSide.none,
+                                      ),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                        borderSide: BorderSide(
+                                          color: const Color(0xFFFDE68A),
+                                        ),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                        borderSide: const BorderSide(
+                                          color: primary,
+                                          width: 2,
+                                        ),
+                                      ),
+                                    ),
+                                    onSubmitted: (_) =>
+                                        _addSubject(folderCount),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                ElevatedButton(
+                                  onPressed:
+                                      (folderCount >= maxFolders || _isAdding)
+                                          ? null
+                                          : () => _addSubject(folderCount),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF7C3AED),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 18,
                                       vertical: 14,
                                     ),
-                                    border: OutlineInputBorder(
+                                    shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(14),
-                                      borderSide: BorderSide.none,
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                      borderSide: BorderSide(
-                                        color: primary.withOpacity(0.15),
-                                      ),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                      borderSide: const BorderSide(
-                                        color: primary,
-                                        width: 2,
-                                      ),
                                     ),
                                   ),
-                                  onSubmitted: (_) => _addSubject(folderCount),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              ElevatedButton(
-                                onPressed:
-                                    (folderCount >= maxFolders || _isAdding)
-                                        ? null
-                                        : () => _addSubject(folderCount),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: primary,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 18,
-                                    vertical: 14,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                ),
-                                child: _isAdding
-                                    ? const SizedBox(
-                                        height: 18,
-                                        width: 18,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
+                                  child: _isAdding
+                                      ? const SizedBox(
+                                          height: 18,
+                                          width: 18,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Text(
+                                          'Add',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                          ),
                                         ),
-                                      )
-                                    : const Text(
-                                        'Add',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                              ),
-                            ],
-                          ),
-                        ],
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-
-                    const Divider(height: 1),
 
                     // Subject folder list
                     Expanded(
@@ -313,7 +409,7 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
                                       Icon(
                                         Icons.folder_copy_outlined,
                                         size: 64,
-                                        color: primary.withOpacity(0.3),
+                                        color: primary.withValues(alpha: 0.35),
                                       ),
                                       const SizedBox(height: 12),
                                       const Text(
@@ -326,7 +422,7 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
                                       ),
                                       const SizedBox(height: 4),
                                       const Text(
-                                        'Create folders (up to 8) to upload course books (PDF, PNG, JPG)\nso AI Chat can ground answers in your syllabus.',
+                                        'Create folders (up to 8) to add text notes or scan note images\nfor syllabus-grounded AI answers.',
                                         textAlign: TextAlign.center,
                                         style: TextStyle(
                                           color: textMuted,
@@ -346,7 +442,9 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
                                     final data =
                                         doc.data() as Map<String, dynamic>;
                                     final name =
-                                        data['name'] ?? 'Unnamed Subject';
+                                        (data['name'] ?? 'Unnamed Subject')
+                                            .toString();
+                                    final folderStyle = subjectFolderStyleAt(i);
 
                                     return InkWell(
                                       onTap: () {
@@ -357,44 +455,57 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
                                               userId: user.uid,
                                               subjectId: doc.id,
                                               subjectName: name,
+                                              folderStyle: folderStyle,
                                             ),
                                           ),
                                         );
                                       },
-                                      borderRadius: BorderRadius.circular(16),
+                                      borderRadius: BorderRadius.circular(19),
                                       child: Container(
-                                        padding: const EdgeInsets.all(16),
+                                        padding: const EdgeInsets.all(14),
                                         decoration: BoxDecoration(
-                                          color: Colors.white,
+                                          color: folderStyle.background,
                                           borderRadius:
-                                              BorderRadius.circular(16),
+                                              BorderRadius.circular(19),
                                           boxShadow: [
                                             BoxShadow(
-                                              color: primary.withOpacity(0.06),
-                                              blurRadius: 10,
+                                              color: folderStyle.accent
+                                                  .withValues(alpha: 0.1),
+                                              blurRadius: 12,
                                               offset: const Offset(0, 4),
                                             ),
                                           ],
                                           border: Border.all(
-                                            color: primary.withOpacity(0.1),
+                                            color: folderStyle.border,
+                                            width: 1.2,
                                           ),
                                         ),
                                         child: Row(
                                           children: [
                                             Container(
-                                              width: 48,
-                                              height: 48,
+                                              width: 52,
+                                              height: 52,
                                               decoration: BoxDecoration(
-                                                gradient: const LinearGradient(
+                                                gradient: LinearGradient(
                                                   colors: [
-                                                    Color(0xFF6366F1),
-                                                    Color(0xFF38BDF8),
+                                                    folderStyle.accent,
+                                                    folderStyle.accent
+                                                        .withValues(
+                                                            alpha: 0.72),
                                                   ],
                                                 ),
                                                 borderRadius:
-                                                    BorderRadius.circular(14),
+                                                    BorderRadius.circular(16),
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: folderStyle.accent
+                                                        .withValues(alpha: 0.2),
+                                                    blurRadius: 9,
+                                                    offset: const Offset(0, 3),
+                                                  ),
+                                                ],
                                               ),
-                                              child: const Icon(
+                                              child: Icon(
                                                 Icons.folder_rounded,
                                                 color: Colors.white,
                                                 size: 26,
@@ -434,10 +545,13 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
                                                               .length ??
                                                           0;
                                                       return Text(
-                                                        '$count file${count == 1 ? '' : 's'} saved in cloud',
-                                                        style: const TextStyle(
-                                                          color: textMuted,
+                                                        '$count file${count == 1 ? '' : 's'} saved',
+                                                        style: TextStyle(
+                                                          color: folderStyle
+                                                              .accent,
                                                           fontSize: 12,
+                                                          fontWeight:
+                                                              FontWeight.w600,
                                                         ),
                                                       );
                                                     },
@@ -446,17 +560,17 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
                                               ),
                                             ),
                                             IconButton(
-                                              icon: const Icon(
+                                              icon: Icon(
                                                 Icons.delete_outline_rounded,
-                                                color: Colors.redAccent,
+                                                color: folderStyle.accent,
                                                 size: 20,
                                               ),
                                               onPressed: () =>
                                                   _deleteSubject(doc.id, name),
                                             ),
-                                            const Icon(
+                                            Icon(
                                               Icons.chevron_right_rounded,
-                                              color: textMuted,
+                                              color: folderStyle.accent,
                                             ),
                                           ],
                                         ),
@@ -474,19 +588,21 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Subject Detail Screen: Web-Safe Cloud Storage for PDF, PNG, JPG, JPEG, JFIF
+// Subject Detail Screen: Store plain-text notes and text extracted from scans.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class SubjectDetailScreen extends StatefulWidget {
   final String userId;
   final String subjectId;
   final String subjectName;
+  final SubjectFolderStyle folderStyle;
 
   const SubjectDetailScreen({
     super.key,
     required this.userId,
     required this.subjectId,
     required this.subjectName,
+    required this.folderStyle,
   });
 
   @override
@@ -495,11 +611,11 @@ class SubjectDetailScreen extends StatefulWidget {
 
 class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
   final _firestore = FirebaseFirestore.instance;
+  final _aiService = AiService();
   bool _isUploading = false;
   String _uploadStatus = '';
 
   static const Color primary = Color(0xFF6C3CF7);
-  static const Color pageBg = Color(0xFFF3F0FF);
   static const Color textDark = Color(0xFF1A1040);
   static const Color textMuted = Color(0xFF6E6B82);
 
@@ -518,42 +634,44 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
         return;
       }
 
-      final filename = image.name.isNotEmpty
+      final imageName = image.name.isNotEmpty
           ? image.name
           : 'Image_${DateTime.now().millisecondsSinceEpoch}.png';
+      final filename = '${imageName.replaceFirst(RegExp(r'\.[^.]+$'), '')}.txt';
 
       String extractedText = '';
 
       if (kIsWeb) {
-        // On Web browser: ML Kit is mobile-only, so we read image metadata/bytes
-        setState(() => _uploadStatus = 'Uploading image to syllabus cloud...');
-        extractedText =
-            'Image lecture note ($filename) uploaded for ${widget.subjectName}. Full on-device ML Kit OCR runs on Android/iOS native mobile devices.';
+        setState(() => _uploadStatus = 'Reading text from image...');
+        extractedText = await _aiService.extractTextFromImageBytes(
+          await image.readAsBytes(),
+          mimeType: image.mimeType ?? 'image/jpeg',
+        );
       } else {
-        // On Native Android / iOS Devices: Run Google ML Kit OCR
         setState(
           () => _uploadStatus = 'Extracting textbook text via ML Kit OCR...',
         );
+        TextRecognizer? textRecognizer;
         try {
           final inputImage = InputImage.fromFilePath(image.path);
-          final textRecognizer =
-              TextRecognizer(script: TextRecognitionScript.latin);
+          textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
           final RecognizedText recognizedText =
               await textRecognizer.processImage(inputImage);
-          await textRecognizer.close();
           extractedText = recognizedText.text.trim();
         } catch (ocrErr) {
-          debugPrint('ML Kit Native OCR Fallback: $ocrErr');
-          extractedText =
-              'Lecture note ($filename) uploaded for ${widget.subjectName}.';
+          throw Exception('Could not read text from "$filename": $ocrErr');
+        } finally {
+          await textRecognizer?.close();
         }
       }
 
       if (extractedText.isEmpty) {
-        extractedText = 'Lecture document: $filename';
+        throw Exception(
+          'No readable text was found in "$filename". Try a clearer image.',
+        );
       }
 
-      setState(() => _uploadStatus = 'Saving to your Firebase cloud...');
+      setState(() => _uploadStatus = 'Saving extracted text to your folder...');
       await _firestore
           .collection('users')
           .doc(widget.userId)
@@ -562,7 +680,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
           .collection('files')
           .add({
         'fileName': filename,
-        'fileType': filename.split('.').last.toLowerCase(),
+        'fileType': 'txt',
         'extractedContent': extractedText,
         'preview': extractedText.length > 120
             ? '${extractedText.substring(0, 120)}...'
@@ -571,9 +689,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
       });
 
       _snack(
-        kIsWeb
-            ? '✅ "$filename" saved in cloud! (Native ML Kit OCR activates on phone)'
-            : '✅ "$filename" saved in cloud & linked to AI Chat!',
+        '✅ Text from "$filename" saved to your subject folder.',
         Colors.green,
       );
     } catch (e) {
@@ -583,7 +699,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
     }
   }
 
-  // 2. Pick Document / PDF (supports .pdf, .txt, .png, .jpg, .jfif, .doc)
+  // 2. Import a plain-text study note.
   Future<void> _pickDocumentFile() async {
     setState(() {
       _isUploading = true;
@@ -592,38 +708,32 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
 
     try {
       const typeGroup = XTypeGroup(
-        label: 'PDF & Documents',
-        mimeTypes: ['application/pdf', 'text/plain'],
-        extensions: ['pdf', 'txt', 'doc', 'docx'],
+        label: 'Plain-text study notes',
+        mimeTypes: ['text/plain'],
+        extensions: ['txt'],
       );
 
       final XFile? file = await openFile(acceptedTypeGroups: [typeGroup]);
-      if (file == null) {
-        setState(() => _isUploading = false);
-        return;
-      }
+      if (file == null) return;
 
       final ext = file.name.split('.').last.toLowerCase();
-      setState(() => _uploadStatus = 'Reading $ext content...');
+      if (ext != 'txt') {
+        throw const FormatException(
+          'Only plain-text (.txt) notes can be imported. '
+          'Use Camera or Gallery to scan an image into a text note.',
+        );
+      }
+      setState(() => _uploadStatus = 'Reading text note...');
 
-      final Uint8List bytes = await file.readAsBytes();
-      String extractedText = '';
-      try {
-        extractedText = utf8.decode(bytes, allowMalformed: true);
-      } catch (_) {
-        extractedText = String.fromCharCodes(bytes);
+      final bytes = await file.readAsBytes();
+      final cleanContent = utf8.decode(bytes, allowMalformed: false).trim();
+      if (cleanContent.isEmpty) {
+        throw const FormatException(
+          'This text file is empty. Add study notes and try again.',
+        );
       }
 
-      final cleanContent = extractedText
-          .replaceAll(RegExp(r'[^\x20-\x7E\n\r\t]'), ' ')
-          .replaceAll(RegExp(r'\s{2,}'), ' ')
-          .trim();
-
-      final finalContent = cleanContent.length > 50
-          ? cleanContent
-          : 'Syllabus reference: ${file.name}. Please prioritize university curriculum questions based on this document.';
-
-      setState(() => _uploadStatus = 'Uploading to cloud account...');
+      setState(() => _uploadStatus = 'Saving text to your folder...');
       await _firestore
           .collection('users')
           .doc(widget.userId)
@@ -632,15 +742,15 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
           .collection('files')
           .add({
         'fileName': file.name,
-        'fileType': ext,
-        'extractedContent': finalContent,
-        'preview': finalContent.length > 120
-            ? '${finalContent.substring(0, 120)}...'
-            : finalContent,
+        'fileType': 'txt',
+        'extractedContent': cleanContent,
+        'preview': cleanContent.length > 120
+            ? '${cleanContent.substring(0, 120)}...'
+            : cleanContent,
         'uploadedAt': FieldValue.serverTimestamp(),
       });
 
-      _snack('✅ "${file.name}" uploaded to cloud!', Colors.green);
+      _snack('✅ "${file.name}" saved to your subject folder.', Colors.green);
     } catch (e) {
       _snack('Failed to import file: $e', Colors.red);
     } finally {
@@ -650,14 +760,19 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
 
   Future<void> _deleteFile(String fileId) async {
     try {
-      await _firestore
+      final fileRef = _firestore
           .collection('users')
           .doc(widget.userId)
           .collection('subjects')
           .doc(widget.subjectId)
           .collection('files')
-          .doc(fileId)
-          .delete();
+          .doc(fileId);
+      final file = await fileRef.get();
+      final storagePath = file.data()?['originalStoragePath'] as String?;
+      if (storagePath != null && storagePath.isNotEmpty) {
+        await _deleteLegacyStorageObject(storagePath);
+      }
+      await fileRef.delete();
       _snack('File removed from your cloud account.', Colors.blueGrey);
     } catch (e) {
       _snack('Could not delete file: $e', Colors.red);
@@ -689,10 +804,10 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
           decoration: BoxDecoration(
-            color: isPrimary ? primary : color.withOpacity(0.08),
+            color: isPrimary ? color : color.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isPrimary ? primary : color.withOpacity(0.35),
+              color: isPrimary ? color : color.withValues(alpha: 0.35),
               width: 1.2,
             ),
           ),
@@ -729,9 +844,9 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: pageBg,
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: pageBg,
+        backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: textDark, size: 22),
@@ -766,12 +881,12 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
             margin: const EdgeInsets.all(18),
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: widget.folderStyle.background,
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: primary.withOpacity(0.15)),
+              border: Border.all(color: widget.folderStyle.border),
               boxShadow: [
                 BoxShadow(
-                  color: primary.withOpacity(0.05),
+                  color: widget.folderStyle.accent.withValues(alpha: 0.08),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
@@ -781,7 +896,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Text(
-                  'Upload Course Books & Notes',
+                  'Add Study Text',
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
@@ -790,7 +905,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  'Accepted: PDF, PNG, JPG, JPEG, JFIF, TXT. Files are read by AI Chat.',
+                  'Add a plain-text (.txt) note or scan clear note images with Camera or Gallery. Scanned images are saved as extracted text.',
                   style: TextStyle(color: textMuted, fontSize: 12),
                 ),
                 const SizedBox(height: 14),
@@ -800,19 +915,19 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const SizedBox(
+                        SizedBox(
                           width: 18,
                           height: 18,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: primary,
+                            color: widget.folderStyle.accent,
                           ),
                         ),
                         const SizedBox(width: 10),
                         Text(
                           _uploadStatus,
-                          style: const TextStyle(
-                            color: primary,
+                          style: TextStyle(
+                            color: widget.folderStyle.accent,
                             fontWeight: FontWeight.bold,
                             fontSize: 12,
                           ),
@@ -827,7 +942,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                         onTap: () => _pickAndOcrImage(ImageSource.camera),
                         icon: Icons.camera_alt_rounded,
                         label: 'Camera',
-                        color: primary,
+                        color: const Color(0xFF0284C7),
                         isPrimary: false,
                       ),
                       const SizedBox(width: 8),
@@ -841,9 +956,9 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                       const SizedBox(width: 8),
                       _buildActionButton(
                         onTap: _pickDocumentFile,
-                        icon: Icons.picture_as_pdf_rounded,
-                        label: 'PDF / Docs',
-                        color: primary,
+                        icon: Icons.text_snippet_rounded,
+                        label: 'Text File',
+                        color: widget.folderStyle.accent,
                         isPrimary: true,
                       ),
                     ],
@@ -865,8 +980,10 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                   .snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(color: primary),
+                  return Center(
+                    child: CircularProgressIndicator(
+                      color: widget.folderStyle.accent,
+                    ),
                   );
                 }
 
@@ -881,7 +998,8 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                           Icon(
                             Icons.cloud_upload_outlined,
                             size: 54,
-                            color: primary.withOpacity(0.35),
+                            color: widget.folderStyle.accent
+                                .withValues(alpha: 0.4),
                           ),
                           const SizedBox(height: 12),
                           const Text(
@@ -894,7 +1012,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                           ),
                           const SizedBox(height: 6),
                           const Text(
-                            'Upload PDFs or pictures of your lecture notes.\nThey will sync to your cloud and ground your AI Chat answers.',
+                            'Add a plain-text (.txt) note or scan clear note images with Camera or Gallery.\nOnly extracted text is saved for syllabus-grounded AI answers.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: textMuted,
@@ -934,10 +1052,10 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: primary.withOpacity(0.08)),
+                        border: Border.all(color: widget.folderStyle.border),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.03),
+                            color: Colors.black.withValues(alpha: 0.03),
                             blurRadius: 8,
                             offset: const Offset(0, 3),
                           ),
@@ -949,7 +1067,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                           Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: iconColor.withOpacity(0.1),
+                              color: iconColor.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Icon(iconData, color: iconColor, size: 22),
@@ -979,7 +1097,8 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                                         vertical: 2,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: iconColor.withOpacity(0.12),
+                                        color:
+                                            iconColor.withValues(alpha: 0.12),
                                         borderRadius: BorderRadius.circular(6),
                                       ),
                                       child: Text(

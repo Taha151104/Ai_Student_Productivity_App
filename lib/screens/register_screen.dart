@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../core/routes.dart';
 import '../services/auth_service.dart';
+import '../widgets/auth_page_shell.dart';
+import 'welcome_screen.dart';
 
 /// UC-01 Register.
 class RegisterScreen extends StatefulWidget {
@@ -25,8 +25,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String? _errorMessage;
 
   static const Color primary = Color(0xFF6C3CF7);
-  static const Color pageBg = Color(0xFFEEEBFD);
-  static const Color fieldFill = Color(0xFFF0EDFE);
+  static const Color fieldFill = Color(0xFFF8F6FF);
   static const Color textDark = Color(0xFF1A1040);
   static const Color textMuted = Color(0xFF5B5E7A);
 
@@ -79,7 +78,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
 
       if (mounted) {
-        Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (_) => PostAuthWelcomeScreen(username: username),
+          ),
+          (_) => false,
+        );
       }
     } catch (e) {
       setState(() => _errorMessage = e.toString());
@@ -98,34 +102,36 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final userCredential = await _authService.signInWithGoogle();
       final user = userCredential?.user;
 
-      if (user != null) {
-        // Check if user doc exists; if not, create it using their Google name/email
-        final userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .get();
+      if (user == null) return;
 
-        if (!userDoc.exists) {
-          final fallbackName = user.displayName ??
-              (user.email != null ? user.email!.split('@').first : 'Student');
+      // Check if user doc exists; if not, create it using their Google name/email.
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
 
-          await FirebaseFirestore.instance
-              .collection('users')
-              .doc(user.uid)
-              .set({
-            'uid': user.uid,
-            'username': fallbackName,
-            'name': user.displayName ?? fallbackName,
-            'displayName': fallbackName,
-            'email': user.email ?? '',
-            'createdAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
-        }
+      final fallbackName = user.displayName ??
+          (user.email != null ? user.email!.split('@').first : 'Student');
+
+      if (!userDoc.exists) {
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'uid': user.uid,
+          'username': fallbackName,
+          'name': user.displayName ?? fallbackName,
+          'displayName': fallbackName,
+          'email': user.email ?? '',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
       }
 
       if (mounted) {
-        Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (_) => PostAuthWelcomeScreen(username: fallbackName),
+          ),
+          (_) => false,
+        );
       }
     } catch (e) {
       setState(() => _errorMessage = e.toString());
@@ -173,269 +179,243 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: pageBg,
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Branding
-                  Center(
-                    child: Container(
-                      width: 72,
-                      height: 72,
-                      margin: const EdgeInsets.only(bottom: 20),
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF6C3CF7), Color(0xFF06B6D4)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: primary.withOpacity(0.4),
-                            blurRadius: 20,
-                            offset: const Offset(0, 8),
-                          ),
-                        ],
-                      ),
-                      child: const Icon(Icons.auto_awesome,
-                          size: 36, color: Colors.white),
-                    ),
-                  ),
-                  const Text(
-                    'Create Account',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: textDark,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Sign up to begin your AI-powered learning journey',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: textMuted, fontSize: 14),
-                  ),
-                  const SizedBox(height: 32),
+    return AuthPageShell(
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Branding
+            const Center(child: AuthBrandMark()),
+            const SizedBox(height: 22),
+            const Text(
+              'YOUR STUDY SPACE, REIMAGINED',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFF6C3CF7),
+                fontSize: 10,
+                letterSpacing: 1.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Create Your Account',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: textDark,
+                fontSize: 27,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.5,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'A happier, smarter way to study starts here 🌈',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: textMuted, fontSize: 14, height: 1.4),
+            ),
+            const SizedBox(height: 26),
 
-                  // Full Name Field
-                  _field(
-                    controller: _nameController,
-                    label: 'Full Name',
-                    hintText: 'e.g. Ahmad Ali',
-                    icon: Icons.person_outline,
-                    keyboard: TextInputType.name,
-                    validator: (v) => (v == null || v.trim().isEmpty)
-                        ? 'Name is required'
-                        : null,
-                  ),
-                  const SizedBox(height: 14),
+            // Full Name Field
+            _field(
+              controller: _nameController,
+              label: 'Full Name',
+              hintText: 'e.g. Ahmad Ali',
+              icon: Icons.person_outline,
+              keyboard: TextInputType.name,
+              validator: (v) =>
+                  (v == null || v.trim().isEmpty) ? 'Name is required' : null,
+            ),
+            const SizedBox(height: 14),
 
-                  // Username Field
-                  _field(
-                    controller: _usernameController,
-                    label: 'Username / Display Name',
-                    hintText: 'e.g. Ahmad or TechScholar',
-                    icon: Icons.alternate_email_rounded,
-                    keyboard: TextInputType.text,
-                    validator: (v) {
-                      if (v == null || v.trim().isEmpty) {
-                        return 'Username is required';
-                      }
-                      if (v.trim().length < 3) {
-                        return 'At least 3 characters';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 14),
+            // Username Field
+            _field(
+              controller: _usernameController,
+              label: 'Username / Display Name',
+              hintText: 'e.g. Ahmad or TechScholar',
+              icon: Icons.alternate_email_rounded,
+              keyboard: TextInputType.text,
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) {
+                  return 'Username is required';
+                }
+                if (v.trim().length < 3) {
+                  return 'At least 3 characters';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 14),
 
-                  // Email Field
-                  _field(
-                    controller: _emailController,
-                    label: 'Email Address',
-                    hintText: 'student@vu.edu.pk',
-                    icon: Icons.mail_outline,
-                    keyboard: TextInputType.emailAddress,
-                    validator: (v) => (v == null || !v.contains('@'))
-                        ? 'Enter a valid email'
-                        : null,
-                  ),
-                  const SizedBox(height: 14),
+            // Email Field
+            _field(
+              controller: _emailController,
+              label: 'Email Address',
+              hintText: 'student@vu.edu.pk',
+              icon: Icons.mail_outline,
+              keyboard: TextInputType.emailAddress,
+              validator: (v) => (v == null || !v.contains('@'))
+                  ? 'Enter a valid email'
+                  : null,
+            ),
+            const SizedBox(height: 14),
 
-                  // Password Field
-                  _field(
-                    controller: _passwordController,
-                    label: 'Password',
-                    icon: Icons.lock_outline,
-                    obscure: _obscurePassword,
-                    suffix: IconButton(
-                      icon: Icon(
-                        _obscurePassword
-                            ? Icons.visibility_outlined
-                            : Icons.visibility_off_outlined,
-                        color: primary,
-                        size: 20,
-                      ),
-                      onPressed: () =>
-                          setState(() => _obscurePassword = !_obscurePassword),
-                    ),
-                    validator: (v) => (v == null || v.length < 6)
-                        ? 'Minimum 6 characters'
-                        : null,
-                  ),
-                  const SizedBox(height: 20),
+            // Password Field
+            _field(
+              controller: _passwordController,
+              label: 'Password',
+              icon: Icons.lock_outline,
+              obscure: _obscurePassword,
+              suffix: IconButton(
+                icon: Icon(
+                  _obscurePassword
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  color: primary,
+                  size: 20,
+                ),
+                onPressed: () =>
+                    setState(() => _obscurePassword = !_obscurePassword),
+              ),
+              validator: (v) =>
+                  (v == null || v.length < 6) ? 'Minimum 6 characters' : null,
+            ),
+            const SizedBox(height: 20),
 
-                  // Error Box
-                  if (_errorMessage != null) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        _errorMessage!,
-                        style:
-                            TextStyle(color: Colors.red.shade700, fontSize: 13),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
+            // Error Box
+            if (_errorMessage != null) ...[
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  _errorMessage!,
+                  style: TextStyle(color: Colors.red.shade700, fontSize: 13),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
 
-                  // Register Button
-                  Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF6C3CF7), Color(0xFF9B6CF9)],
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: primary.withOpacity(0.4),
-                          blurRadius: 14,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
-                    ),
-                    child: ElevatedButton(
-                      onPressed: _isLoading ? null : _handleRegister,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.transparent,
-                        shadowColor: Colors.transparent,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                      child: _isLoading
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor:
-                                    AlwaysStoppedAnimation(Colors.white),
-                              ),
-                            )
-                          : const Text(
-                              'Register',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Divider
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Divider(
-                          color: textMuted.withOpacity(0.3),
-                          thickness: 1,
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Text(
-                          'or',
-                          style: TextStyle(
-                            color: textMuted.withOpacity(0.8),
-                            fontSize: 13,
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Divider(
-                          color: textMuted.withOpacity(0.3),
-                          thickness: 1,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Google Sign-In Button
-                  OutlinedButton.icon(
-                    onPressed: _isLoading ? null : _handleGoogleSignIn,
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      side: BorderSide(color: primary.withOpacity(0.35)),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      foregroundColor: textDark,
-                    ),
-                    icon: const Icon(Icons.g_mobiledata,
-                        size: 24, color: primary),
-                    label: const Text(
-                      'Continue with Google',
-                      style:
-                          TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-
-                  // Sign In Link
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text(
-                        'Already have an account? ',
-                        style: TextStyle(color: textMuted, fontSize: 14),
-                      ),
-                      GestureDetector(
-                        onTap: () => Navigator.pop(context),
-                        child: const Text(
-                          'Sign In',
-                          style: TextStyle(
-                            color: primary,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
+            // Register Button
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF6C3CF7), Color(0xFF9B6CF9)],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: primary.withValues(alpha: 0.4),
+                    blurRadius: 14,
+                    offset: const Offset(0, 6),
                   ),
                 ],
               ),
+              child: ElevatedButton(
+                onPressed: _isLoading ? null : _handleRegister,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.transparent,
+                  shadowColor: Colors.transparent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                child: _isLoading
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(Colors.white),
+                        ),
+                      )
+                    : const Text(
+                        'Register',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+              ),
             ),
-          ),
+            const SizedBox(height: 16),
+
+            // Divider
+            Row(
+              children: [
+                Expanded(
+                  child: Divider(
+                    color: textMuted.withValues(alpha: 0.3),
+                    thickness: 1,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                    'or',
+                    style: TextStyle(
+                      color: textMuted.withValues(alpha: 0.8),
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Divider(
+                    color: textMuted.withValues(alpha: 0.3),
+                    thickness: 1,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // Google Sign-In Button
+            OutlinedButton.icon(
+              onPressed: _isLoading ? null : _handleGoogleSignIn,
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                side: BorderSide(color: primary.withValues(alpha: 0.35)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                foregroundColor: textDark,
+              ),
+              icon: const Icon(Icons.g_mobiledata, size: 24, color: primary),
+              label: const Text(
+                'Continue with Google',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Sign In Link
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text(
+                  'Already have an account? ',
+                  style: TextStyle(color: textMuted, fontSize: 14),
+                ),
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: const Text(
+                    'Sign In',
+                    style: TextStyle(
+                      color: primary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
