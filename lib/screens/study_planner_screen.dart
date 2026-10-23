@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../services/notification_service.dart';
@@ -49,7 +50,38 @@ class _StudyPlannerScreenState extends State<StudyPlannerScreen>
   void initState() {
     super.initState();
     _notificationService.init();
+    if (kIsWeb) _restoreBrowserReminders();
     _tabController = TabController(length: 2, vsync: this);
+  }
+
+  Future<void> _restoreBrowserReminders() async {
+    if (!_notificationService.webNotificationPermissionGranted) return;
+
+    try {
+      final snapshot = await _plannerCollection
+          .where('dueDate', isGreaterThan: Timestamp.fromDate(DateTime.now()))
+          .orderBy('dueDate')
+          .limit(100)
+          .get();
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data() as Map<String, dynamic>;
+        final notificationId = data['notificationId'];
+        if (notificationId is! int ||
+            data['isCompleted'] == true ||
+            data['dueDate'] is! Timestamp) {
+          continue;
+        }
+        await _notificationService.scheduleStudyReminder(
+          id: notificationId,
+          title: (data['title'] ?? 'Study task').toString(),
+          subject: (data['subject'] ?? 'General').toString(),
+          scheduledDate: (data['dueDate'] as Timestamp).toDate(),
+        );
+      }
+    } catch (error) {
+      debugPrint('Could not restore browser study reminders: $error');
+    }
   }
 
   @override
@@ -82,6 +114,17 @@ class _StudyPlannerScreenState extends State<StudyPlannerScreen>
     );
     if (!mounted || savedTask == null) return;
 
+    if (!savedTask.reminderPermissionGranted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Plan saved, but notifications are blocked. Allow notifications in your browser or device settings.',
+          ),
+        ),
+      );
+      return;
+    }
+
     if (!savedTask.setReminder) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Study plan saved!')),
@@ -103,8 +146,13 @@ class _StudyPlannerScreenState extends State<StudyPlannerScreen>
           .timeout(const Duration(seconds: 20));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Study reminder scheduled on this phone.')),
+          SnackBar(
+            content: Text(
+              kIsWeb
+                  ? 'Reminder scheduled in this browser session. Keep the app open until the reminder time.'
+                  : 'Study reminder scheduled on this phone.',
+            ),
+          ),
         );
       }
     } catch (error) {
@@ -777,6 +825,7 @@ class _SavedStudyTask {
   final String subject;
   final DateTime scheduledDate;
   final bool setReminder;
+  final bool reminderPermissionGranted;
 
   const _SavedStudyTask({
     required this.notificationId,
@@ -784,6 +833,7 @@ class _SavedStudyTask {
     required this.subject,
     required this.scheduledDate,
     required this.setReminder,
+    required this.reminderPermissionGranted,
   });
 }
 
@@ -842,6 +892,8 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
     setState(() => _isSaving = true);
 
     try {
+      final reminderPermissionGranted = !_setReminder ||
+          await widget.notificationService.requestPermissions();
       final int notificationId =
           DateTime.now().millisecondsSinceEpoch.remainder(100000);
 
@@ -850,7 +902,8 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
         'subject': subject,
         'dueDate': Timestamp.fromDate(_selectedDate),
         'isCompleted': false,
-        'notificationId': _setReminder ? notificationId : null,
+        'notificationId':
+            _setReminder && reminderPermissionGranted ? notificationId : null,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -862,7 +915,8 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
             title: title,
             subject: subject,
             scheduledDate: _selectedDate,
-            setReminder: _setReminder,
+            setReminder: _setReminder && reminderPermissionGranted,
+            reminderPermissionGranted: reminderPermissionGranted,
           ),
         );
       }

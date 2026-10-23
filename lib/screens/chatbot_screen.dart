@@ -475,11 +475,6 @@ INSTRUCTION: If this query references course concepts or handouts from above, an
             systemPrompt: systemPrompt,
             history: List.of(_history),
             imageBytes: diagramPageImage,
-          )
-          .timeout(
-            const Duration(seconds: 22),
-            onTimeout: () =>
-                'Connection took a bit longer than expected. Please check your network and try again!',
           );
 
       _history.add({'role': 'user', 'content': text});
@@ -493,10 +488,11 @@ INSTRUCTION: If this query references course concepts or handouts from above, an
       }
     } catch (e) {
       if (mounted) {
+        final errorMessage =
+            e.toString().replaceFirst(RegExp(r'^Exception: '), '');
         setState(() => _messages.add(ChatMessage(
               sender: 'ai',
-              text:
-                  'Unable to reach the assistant. Please check your data connection.',
+              text: 'AI request failed: $errorMessage',
               timestamp: DateTime.now(),
             )));
       }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import 'firebase_options.dart';
 import 'core/routes.dart';
@@ -17,6 +18,10 @@ void main() async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+    if (const bool.fromEnvironment('USE_FUNCTIONS_EMULATOR')) {
+      FirebaseFunctions.instanceFor(region: 'us-central1')
+          .useFunctionsEmulator('127.0.0.1', 5001);
+    }
     isFirebaseInitialized = true;
   } catch (e) {
     debugPrint('Firebase initialization failed: $e');

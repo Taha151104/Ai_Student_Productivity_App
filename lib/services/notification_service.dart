@@ -3,6 +3,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
+import 'notification_service_web_stub.dart'
+    if (dart.library.html) 'notification_service_web.dart' as web_notifications;
+
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
@@ -13,8 +16,16 @@ class NotificationService {
 
   bool _initialized = false;
 
+  bool get webNotificationPermissionGranted =>
+      kIsWeb && web_notifications.webNotificationPermissionGranted;
+
   Future<void> init() async {
     if (_initialized) return;
+
+    if (kIsWeb) {
+      _initialized = true;
+      return;
+    }
 
     // 1. Initialize timezone database
     tz.initializeTimeZones();
@@ -60,6 +71,10 @@ class NotificationService {
 
   /// Request permissions on-demand (called when user saves a plan)
   Future<bool> requestPermissions() async {
+    if (kIsWeb) {
+      return web_notifications.requestWebNotificationPermission();
+    }
+
     final androidPlugin =
         _notificationsPlugin.resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
@@ -79,7 +94,10 @@ class NotificationService {
     required DateTime scheduledDate,
   }) async {
     await init();
-    await requestPermissions();
+    final permissionGranted = await requestPermissions();
+    if (!permissionGranted) {
+      throw StateError('Notification permission was not granted.');
+    }
 
     // Prevent scheduling past dates
     if (scheduledDate.isBefore(DateTime.now())) {
@@ -87,6 +105,16 @@ class NotificationService {
     }
 
     final scheduledTz = tz.TZDateTime.from(scheduledDate, tz.local);
+
+    if (kIsWeb) {
+      web_notifications.scheduleWebNotification(
+        id: id,
+        title: 'Study Time: $title',
+        body: 'Time to study your $subject materials and notes!',
+        scheduledDate: scheduledDate,
+      );
+      return;
+    }
 
     const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
@@ -135,6 +163,10 @@ class NotificationService {
   }
 
   Future<void> cancelReminder(int id) async {
+    if (kIsWeb) {
+      web_notifications.cancelWebNotification(id);
+      return;
+    }
     await _notificationsPlugin.cancel(id);
   }
 }

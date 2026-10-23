@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import '../core/routes.dart';
 import 'account_settings_screen.dart';
 import 'subjects_screen.dart';
-import 'support_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 🎨 EDIT ALL YOUR DASHBOARD WIDGET COLORS RIGHT HERE:
@@ -42,6 +41,19 @@ class DashboardTheme {
     Color(0xFFFF9100),
     Color(0xFFFF5722)
   ];
+
+  // 7. SUBJECT FOLDERS (Blue / Indigo)
+  static const Color subjectsCard = Color(0xFFE0E7FF);
+  static const Color subjectsBorder = Color(0xFFA5B4FC);
+  static const List<Color> subjectsIcon = [
+    Color(0xFF818CF8),
+    Color(0xFF4F46E5)
+  ];
+
+  // 8. SUPPORT (Purple)
+  static const Color supportCard = Color(0xFFF3E8FF);
+  static const Color supportBorder = Color(0xFFD8B4FE);
+  static const List<Color> supportIcon = [Color(0xFFA855F7), Color(0xFF7E22CE)];
 }
 
 class DashboardScreen extends StatefulWidget {
@@ -97,6 +109,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
           ),
+          Positioned(
+            top: 345,
+            left: -42,
+            child: Container(
+              width: 128,
+              height: 128,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF86EFAC).withValues(alpha: 0.20),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 430,
+            right: -32,
+            child: Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFFFDE047).withValues(alpha: 0.22),
+              ),
+            ),
+          ),
 
           SafeArea(
             bottom: false,
@@ -111,10 +147,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     children: [
                       _buildHeader(),
                       const SizedBox(height: 22),
+                      const Text(
+                        'Study tools',
+                        style: TextStyle(
+                          color: textDark,
+                          fontSize: 19,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       _buildStudyToolsGrid(context),
                       const SizedBox(height: 18),
-                      _buildSupportBanner(context),
-                      const SizedBox(height: 26),
                       _buildSubjectFoldersSection(),
                     ],
                   ),
@@ -302,7 +345,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final modules = [
       _ModuleData(
         title: 'Scan Notes',
-        subtitle: 'Scan and digitize\nyour notes',
+        subtitle: 'Digitize your notes',
         icon: Icons.document_scanner_rounded,
         route: AppRoutes.notesUpload,
         cardBg: DashboardTheme.scanCard,
@@ -311,7 +354,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       _ModuleData(
         title: 'AI Chat',
-        subtitle: 'Ask anything,\nget instant help',
+        subtitle: 'Ask study questions',
         icon: Icons.chat_bubble_outline_rounded,
         route: AppRoutes.chatbot,
         cardBg: DashboardTheme.chatCard,
@@ -320,7 +363,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       _ModuleData(
         title: 'Study Planner',
-        subtitle: 'Plan your study\nschedule easily',
+        subtitle: 'Plan your study time',
         icon: Icons.calendar_month_rounded,
         route: AppRoutes.studyPlanner,
         cardBg: DashboardTheme.plannerCard,
@@ -328,8 +371,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         iconGradient: DashboardTheme.plannerIcon,
       ),
       _ModuleData(
-        title: 'Quizzes',
-        subtitle: 'Test your knowledge\nwith quizzes',
+        title: 'Quiz',
+        subtitle: 'Test your knowledge',
         icon: Icons.emoji_events_rounded,
         route: AppRoutes.quiz,
         cardBg: DashboardTheme.quizCard,
@@ -337,8 +380,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         iconGradient: DashboardTheme.quizIcon,
       ),
       _ModuleData(
-        title: 'AI Summaries',
-        subtitle: 'Get quick summaries\nof your notes',
+        title: 'AI Summarizer',
+        subtitle: 'Summarize your notes',
         icon: Icons.auto_stories_rounded,
         route: AppRoutes.aiSummary,
         cardBg: DashboardTheme.summaryCard,
@@ -346,25 +389,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
         iconGradient: DashboardTheme.summaryIcon,
       ),
       _ModuleData(
-        title: 'VU Flashcards',
-        subtitle: 'Smart flashcards for\nbetter learning',
+        title: 'Flashcards',
+        subtitle: 'Review key ideas',
         icon: Icons.style_outlined,
         route: AppRoutes.flashcards,
         cardBg: DashboardTheme.flashcardCard,
         borderColor: DashboardTheme.flashcardBorder,
         iconGradient: DashboardTheme.flashcardIcon,
       ),
+      _ModuleData(
+        title: 'Subjects',
+        subtitle: 'Your course folders',
+        icon: Icons.folder_rounded,
+        route: AppRoutes.subjects,
+        cardBg: DashboardTheme.subjectsCard,
+        borderColor: DashboardTheme.subjectsBorder,
+        iconGradient: DashboardTheme.subjectsIcon,
+      ),
+      _ModuleData(
+        title: 'Support System',
+        subtitle: 'Study & technical help',
+        icon: Icons.support_agent_rounded,
+        route: AppRoutes.support,
+        cardBg: DashboardTheme.supportCard,
+        borderColor: DashboardTheme.supportBorder,
+        iconGradient: DashboardTheme.supportIcon,
+      ),
     ];
 
+    final isCompactWidth = MediaQuery.sizeOf(context).width < 600;
     return GridView.builder(
       itemCount: modules.length,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 11,
-        mainAxisSpacing: 13,
-        childAspectRatio: 0.74,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 11,
+        childAspectRatio: isCompactWidth ? 1.35 : 1.5,
       ),
       itemBuilder: (context, index) =>
           _buildModuleCard(context, modules[index]),
@@ -379,10 +441,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Container(
         decoration: BoxDecoration(
           color: module.cardBg,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(17),
           border: Border.all(
             color: module.borderColor,
-            width: 2.0, // Solid border
+            width: 1.7,
           ),
           boxShadow: [
             BoxShadow(
@@ -392,13 +454,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
-        padding: const EdgeInsets.fromLTRB(8, 12, 8, 10),
+        padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              width: 50,
-              height: 50,
+              width: 36,
+              height: 36,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: LinearGradient(
@@ -414,80 +476,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ],
               ),
-              child: Icon(module.icon, color: Colors.white, size: 24),
+              child: Icon(module.icon, color: Colors.white, size: 19),
             ),
-            const SizedBox(height: 9),
+            const SizedBox(height: 6),
             Text(
               module.title,
               textAlign: TextAlign.center,
-              maxLines: 1,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: textDark,
                 fontWeight: FontWeight.w800,
                 fontSize: 13.5,
+                height: 1.15,
               ),
             ),
-            const SizedBox(height: 3),
+            const SizedBox(height: 2),
             Text(
               module.subtitle,
               textAlign: TextAlign.center,
-              maxLines: 2,
+              maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: Color(0xFF334155),
                 fontWeight: FontWeight.w600,
-                fontSize: 10,
-                height: 1.25,
+                fontSize: 10.5,
+                height: 1.15,
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSupportBanner(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-            context, MaterialPageRoute(builder: (_) => const SupportScreen()));
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFC7D2FE), width: 1.4),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(7),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                    colors: [Color(0xFF818CF8), Color(0xFF4F46E5)]),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.support_agent_rounded,
-                  color: Colors.white, size: 18),
-            ),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Need Help with Your Courses?',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12.5,
-                          color: textDark)),
-                  Text('Student technical & study support desk',
-                      style: TextStyle(color: textMuted, fontSize: 10.5)),
-                ],
-              ),
-            ),
-            const Icon(Icons.chevron_right_rounded, color: textMuted, size: 20),
           ],
         ),
       ),
